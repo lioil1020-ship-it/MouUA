@@ -143,5 +143,31 @@
         }
       ]
     }
-  ]
+  ],
+  "opcua": {
+    "application_Name": "ModUA",
+    "host_name": "ModUA",
+    "namespace": "ModUA",
+    "port": "48480",
+    "product_uri": "opc.tcp://192.168.1.101:48480",
+    "max_sessions": "4096",
+    "publish_interval": "1000",
+    "authentication": "Anonymous",
+    "username": "",
+    "password": "",
+    "organization": "Organization",
+    "organization_unit": "Unit",
+    "locality": "Locality",
+    "state": "State",
+    "country": "tw",
+    "cert_validity": "20",
+    "policy_none": true,
+    "policy_sign_aes128": false,
+    "policy_sign_aes256": false,
+    "policy_sign_basic256sha256": false,
+    "policy_encrypt_aes128": false,
+    "policy_encrypt_aes256": false,
+    "policy_encrypt_basic256sha256": false,
+    "auto_generate": true
+  }
 }

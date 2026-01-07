@@ -209,7 +209,7 @@ class OPCUADialog(QDialog):
                 except: return '127.0.0.1'
             h = _get_ip() if not host or host.lower() in ('localhost', '127.0.0.1', 'modua') else host
             if hasattr(self, 'endpoint_display'):
-                self.endpoint_display.setText(f"opc.tcp://{h}:{port if port else '4848'}")
+                self.endpoint_display.setText(f"opc.tcp://{h}:{port if port else '48480'}")
         except: pass
 
     def _connect_endpoint_updaters(self):
@@ -219,7 +219,7 @@ class OPCUADialog(QDialog):
 
     def _apply_defaults(self, initial):
         defaults = {
-            'application_Name':'ModUA','host_name': 'ModUA', 'namespace': 'ModUA', 'port': '4848',
+            'application_Name':'ModUA','host_name': 'ModUA', 'namespace': 'ModUA', 'port': '48480',
             'policy_none': True, 'policy_sign_aes128': False, 'policy_sign_aes256': False,
             'policy_sign_basic256sha256': False, 'policy_encrypt_aes128': False,
             'policy_encrypt_aes256': False, 'policy_encrypt_basic256sha256': False,

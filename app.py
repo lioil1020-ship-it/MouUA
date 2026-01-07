@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QMessageBox,
     QMenu,
+    QDialog,
     QFileDialog,
     QTextEdit,
     QInputDialog,
@@ -17,24 +18,24 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
 )
-from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QShortcut, QKeySequence, QFont, QAction
-import asyncio
-import os
-import logging
-import re
-
-# Note: dialog modules import the widgets they need; app.py does not require extra widget imports
-
+from PyQt6.QtCore import Qt, QTimer
 from ui.dragdrop_tree import ConnectivityTree
 from dialogs.channel_dialog import ChannelDialog
 from dialogs.device_dialog import DeviceDialog
 from dialogs.tag_dialog import TagDialog
 from dialogs.opcua_dialog import OPCUADialog
+try:
+    from core.data_manager import DataBroker
+except Exception:
+    DataBroker = None
+try:
+    from OPC_UA import OPCServer
+except Exception:
+    OPCServer = None
 from clipboard import ClipboardManager
 from controllers import AppController
 from modbus_worker import AsyncPoller
-
 
 class MonitorWindow(QMainWindow):
     """Tag 監看視窗 - 顯示監視的 Tag 數據"""
@@ -317,6 +318,16 @@ class IoTApp(QMainWindow):
         # 調整表頭高度
         if hasattr(self.tree, "header"):
             self.tree.header().setDefaultSectionSize(100)
+
+        # Data broker: thread-safe latest-values store
+        try:
+            self.data_broker = DataBroker()
+        except Exception:
+            self.data_broker = None
+
+        # OPC server holder and update timer
+        self.opc_server = None
+        self._opc_update_timer = None
 
         # 🔗 連結樹狀圖訊號
         self.tree.request_new_channel.connect(self.on_new_channel)
@@ -1408,6 +1419,66 @@ class IoTApp(QMainWindow):
         self.add_all_tags_to_monitor()
         # 然後啟動輪詢
         self.start_polling()
+        # 同步嘗試啟動 OPC UA Server（如果有設定且尚未啟動），以方便使用者用 Runtime 一鍵啟動
+        try:
+            # only attempt if server not running and settings present
+            if getattr(self, 'opc_server', None) is None:
+                vals = getattr(self, 'opcua_settings', None)
+                if vals:
+                    try:
+                        if OPCServer is None:
+                            self.append_diagnostic('OPC UA library not available; cannot start server')
+                        else:
+                            self.opc_server = OPCServer(vals)
+                            try:
+                                self.opc_server.start()
+                                try:
+                                    self.append_diagnostic('OPC UA: Running (started from Runtime)')
+                                except Exception:
+                                    pass
+                            except Exception as e:
+                                try:
+                                    self.append_diagnostic(f'OPC UA failed to start from Runtime: {e}')
+                                except Exception:
+                                    pass
+                                self.opc_server = None
+
+                            # create nodes from tree if available
+                            try:
+                                if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
+                                    root = getattr(self.tree, 'conn_node', None)
+                                    if root:
+                                        try:
+                                            self.opc_server.setup_tags_from_tree(root)
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                pass
+
+                            # start periodic push timer if broker exists and timer not running
+                            try:
+                                if getattr(self, 'opc_server', None) and getattr(self, 'data_broker', None):
+                                    if getattr(self, '_opc_update_timer', None) is None:
+                                        self._opc_update_timer = QTimer(self)
+                                        self._opc_update_timer.setInterval(200)
+                                        def _push_runtime():
+                                            try:
+                                                snap = self.data_broker.snapshot()
+                                                for k, v in snap.items():
+                                                    try:
+                                                        self.opc_server.update_tag(k, v.get('value'))
+                                                    except Exception:
+                                                        pass
+                                            except Exception:
+                                                pass
+                                        self._opc_update_timer.timeout.connect(_push_runtime)
+                                        self._opc_update_timer.start()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def stop_runtime(self):
         """停止 Runtime"""
@@ -1445,14 +1516,78 @@ class IoTApp(QMainWindow):
         try:
             initial = getattr(self, 'opcua_settings', None) or {}
             dlg = OPCUADialog(self, initial=initial)
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                vals = dlg.values()
-                # store settings on the main window for later use
-                self.opcua_settings = vals
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            vals = dlg.values()
+            # store settings on the main window for later use
+            self.opcua_settings = vals
+            try:
+                self.append_diagnostic(f"OPC UA settings saved: {vals}")
+            except Exception:
+                pass
+
+            # stop existing server if any
+            if getattr(self, 'opc_server', None):
                 try:
-                    self.append_diagnostic(f"OPC UA settings saved: {vals}")
+                    self.opc_server.stop()
                 except Exception:
                     pass
+                self.opc_server = None
+
+            # start server
+            if OPCServer is None:
+                try:
+                    self.append_diagnostic("OPC UA library not available; cannot start server")
+                except Exception:
+                    pass
+                return
+
+            self.opc_server = OPCServer(vals)
+            try:
+                self.opc_server.start()
+                try:
+                    self.append_diagnostic("OPC UA: Running")
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    self.append_diagnostic(f"OPC UA failed to start: {e}")
+                except Exception:
+                    pass
+                self.opc_server = None
+
+            # If server started, create nodes from tree
+            try:
+                if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
+                    root = getattr(self.tree, 'conn_node', None)
+                    if root:
+                        self.opc_server.setup_tags_from_tree(root)
+            except Exception:
+                pass
+
+            # create periodic timer to push broker snapshot to OPC server
+            try:
+                if getattr(self, 'opc_server', None) and getattr(self, 'data_broker', None):
+                    if self._opc_update_timer is None:
+                        self._opc_update_timer = QTimer(self)
+                        self._opc_update_timer.setInterval(200)
+
+                        def _push():
+                            try:
+                                snap = self.data_broker.snapshot()
+                                for k, v in snap.items():
+                                    try:
+                                        self.opc_server.update_tag(k, v.get('value'))
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+
+                        self._opc_update_timer.timeout.connect(_push)
+                        self._opc_update_timer.start()
+            except Exception:
+                pass
         except Exception as e:
             try:
                 self.append_diagnostic(f"Failed to open OPC UA settings: {e}")
@@ -1988,6 +2123,11 @@ class IoTApp(QMainWindow):
                     except Exception:
                         pass
                 poller.tag_polled.connect(self._on_tag_polled)
+                try:
+                    if getattr(self, 'data_broker', None) is not None:
+                        poller.tag_polled.connect(self.data_broker.handle_polled)
+                except Exception:
+                    pass
                 try:
                     poller.diag_signal.connect(self.append_diagnostic)
                 except Exception:

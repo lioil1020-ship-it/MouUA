@@ -825,6 +825,14 @@ class AppController:
             if ch.data(0, Qt.ItemDataRole.UserRole) == "Channel":
                 doc["channels"].append(serialize_item(ch))
 
+        # include opcua settings if present on main window
+        try:
+            opc = getattr(self.app, 'opcua_settings', None)
+            if opc:
+                doc['opcua'] = opc
+        except Exception:
+            pass
+
         d = os.path.dirname(filepath)
         if d and not os.path.exists(d):
             os.makedirs(d, exist_ok=True)
@@ -886,6 +894,16 @@ class AppController:
         for ch in doc.get("channels", []):
             build_node(root, ch)
         root.setExpanded(True)
+        # restore opcua settings into application state if present
+        try:
+            opc_doc = doc.get('opcua')
+            if opc_doc is not None:
+                try:
+                    self.app.opcua_settings = opc_doc
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def read_tag_value(self, tag_item, host: str = None, port: int = 502, unit: int = 1, timeout: float = 3.0, connect_timeout: float | None = None, client_mode: str = "tcp", client_params: dict | None = None, diag_callback=None):
         """Read a single tag value via Modbus (synchronous wrapper).
