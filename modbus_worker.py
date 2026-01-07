@@ -1040,6 +1040,25 @@ class AsyncPoller(QObject):
         try:
             if self._in_main_loop:
                 self._emit_diag("Poller started on main asyncio loop")
+            # emit concise startup diagnostics including connection info
+            try:
+                # If the poller was marked as a serial/RTU poller by the creator,
+                # emit a serial-style startup line; otherwise emit host/port.
+                if getattr(self, '_is_serial', False):
+                    sp = getattr(self, '_serial_params', {}) or {}
+                    port_s = sp.get('port', '')
+                    baud_s = sp.get('baud', '')
+                    bytesize_s = sp.get('bytesize', '')
+                    stopbits_s = sp.get('stopbits', '')
+                    parity_s = sp.get('parity', '')
+                    flow_s = sp.get('flow', '')
+                    self._emit_diag(
+                        f"Poller START: mode=rtu port={port_s} baud={baud_s} bytesize={bytesize_s} stopbits={stopbits_s} parity={parity_s} flow={flow_s} unit={self.unit} interval={self.interval}"
+                    )
+                else:
+                    self._emit_diag(f"Poller START: host={self.host} port={self.port} unit={self.unit} interval={self.interval}")
+            except Exception:
+                pass
             # when running in a background thread we intentionally do not emit
             # a startup diagnostic line to keep diagnostics compact.
         except Exception:

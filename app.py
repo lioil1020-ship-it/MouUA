@@ -1707,12 +1707,50 @@ class IoTApp(QMainWindow):
                     if ch is not None and ch.data(0, Qt.ItemDataRole.UserRole) == "Channel":
                         ch_params = ch.data(2, Qt.ItemDataRole.UserRole)
                         if isinstance(ch_params, dict):
-                            host = ch_params.get("ip") or ch_params.get("host") or ch_params.get("address") or host
+                            # If channel params look like serial (com/adapter/method=rtu), show serial info;
+                            # otherwise show host:port for TCP.
+                            is_serial = False
                             try:
-                                port = int(ch_params.get("port", port))
+                                method = (ch_params.get("method") or "").lower()
+                                if method in ("rtu", "serial"):
+                                    is_serial = True
                             except Exception:
-                                port = port
-                            self.append_diagnostic(f"Using Channel params for connection: {host}:{port}")
+                                pass
+                            if not is_serial:
+                                if any(k in ch_params for k in ("com", "adapter", "serial_port")):
+                                    is_serial = True
+
+                            if is_serial:
+                                try:
+                                    serial_port = ch_params.get("com") or ch_params.get("adapter") or ch_params.get("serial_port") or ""
+                                    baud = ch_params.get("baud") or ch_params.get("baudrate") or ""
+                                    parity = ch_params.get("parity") or ""
+                                    # data bits / bytesize
+                                    bytesize = ch_params.get("bytesize") or ch_params.get("data_bits") or ch_params.get("databits") or ch_params.get("data") or ""
+                                    # stop bits
+                                    stopbits = ch_params.get("stopbits") or ch_params.get("stop_bits") or ch_params.get("stop") or ""
+                                    # flow control (can be textual or flags)
+                                    flow = ch_params.get("flow") or ch_params.get("flow_control") or ""
+                                    if not flow:
+                                        # derive from flags if present
+                                        if ch_params.get("xonxoff"):
+                                            flow = "xonxoff"
+                                        elif ch_params.get("rtscts") and ch_params.get("dsrdtr"):
+                                            flow = "rtscts+dsrdtr"
+                                        elif ch_params.get("rtscts"):
+                                            flow = "rtscts"
+                                        elif ch_params.get("dsrdtr"):
+                                            flow = "dsrdtr"
+                                    self.append_diagnostic(f"Using Channel params for connection (serial): port={serial_port} baud={baud} bytesize={bytesize} stopbits={stopbits} parity={parity} flow={flow}")
+                                except Exception:
+                                    self.append_diagnostic("Using Channel params for connection (serial)")
+                            else:
+                                host = ch_params.get("ip") or ch_params.get("host") or ch_params.get("address") or host
+                                try:
+                                    port = int(ch_params.get("port", port))
+                                except Exception:
+                                    port = port
+                                self.append_diagnostic(f"Using Channel params for connection: {host}:{port}")
                     dev_id = id(dev)
                     logged_devices.add(dev_id)
                 # unit / slave id stored as device id at data(2)
@@ -1759,12 +1797,44 @@ class IoTApp(QMainWindow):
                                 if tag_ch is not None and tag_ch.data(0, Qt.ItemDataRole.UserRole) == "Channel":
                                     tag_ch_params = tag_ch.data(2, Qt.ItemDataRole.UserRole)
                                     if isinstance(tag_ch_params, dict):
-                                        tag_host = tag_ch_params.get("ip") or tag_ch_params.get("host") or tag_ch_params.get("address") or host
+                                        is_serial = False
                                         try:
-                                            tag_port = int(tag_ch_params.get("port", port))
+                                            tmethod = (tag_ch_params.get("method") or "").lower()
+                                            if tmethod in ("rtu", "serial"):
+                                                is_serial = True
                                         except Exception:
-                                            tag_port = port
-                                        self.append_diagnostic(f"Using Channel params for connection: {tag_host}:{tag_port}")
+                                            pass
+                                        if not is_serial:
+                                            if any(k in tag_ch_params for k in ("com", "adapter", "serial_port")):
+                                                is_serial = True
+
+                                        if is_serial:
+                                            try:
+                                                serial_port = tag_ch_params.get("com") or tag_ch_params.get("adapter") or tag_ch_params.get("serial_port") or ""
+                                                baud = tag_ch_params.get("baud") or tag_ch_params.get("baudrate") or ""
+                                                parity = tag_ch_params.get("parity") or ""
+                                                bytesize = tag_ch_params.get("bytesize") or tag_ch_params.get("data_bits") or tag_ch_params.get("databits") or tag_ch_params.get("data") or ""
+                                                stopbits = tag_ch_params.get("stopbits") or tag_ch_params.get("stop_bits") or tag_ch_params.get("stop") or ""
+                                                flow = tag_ch_params.get("flow") or tag_ch_params.get("flow_control") or ""
+                                                if not flow:
+                                                    if tag_ch_params.get("xonxoff"):
+                                                        flow = "xonxoff"
+                                                    elif tag_ch_params.get("rtscts") and tag_ch_params.get("dsrdtr"):
+                                                        flow = "rtscts+dsrdtr"
+                                                    elif tag_ch_params.get("rtscts"):
+                                                        flow = "rtscts"
+                                                    elif tag_ch_params.get("dsrdtr"):
+                                                        flow = "dsrdtr"
+                                                self.append_diagnostic(f"Using Channel params for connection (serial): port={serial_port} baud={baud} bytesize={bytesize} stopbits={stopbits} parity={parity} flow={flow}")
+                                            except Exception:
+                                                self.append_diagnostic("Using Channel params for connection (serial)")
+                                        else:
+                                            tag_host = tag_ch_params.get("ip") or tag_ch_params.get("host") or tag_ch_params.get("address") or host
+                                            try:
+                                                tag_port = int(tag_ch_params.get("port", port))
+                                            except Exception:
+                                                tag_port = port
+                                            self.append_diagnostic(f"Using Channel params for connection: {tag_host}:{tag_port}")
                 except Exception:
                     pass
             # prefer tag scan rate if present; interpret values as milliseconds
@@ -1823,6 +1893,47 @@ class IoTApp(QMainWindow):
         for (h, pnum, u, inv), tags_for_group in groups.items():
             try:
                 poller = AsyncPoller(self.controller, host=h, port=pnum, unit=u, interval=inv)
+                # attach serial metadata to poller so worker can emit appropriate diagnostics
+                try:
+                    first_tag_for_group = tags_for_group[0] if tags_for_group else None
+                    is_serial_poll = False
+                    serial_meta = {}
+                    if first_tag_for_group:
+                        dev = first_tag_for_group.parent()
+                        while dev is not None and dev.data(0, Qt.ItemDataRole.UserRole) != "Device":
+                            dev = dev.parent()
+                        if dev is not None:
+                            ch = dev.parent()
+                            if ch is not None and ch.data(0, Qt.ItemDataRole.UserRole) == "Channel":
+                                ch_params = ch.data(2, Qt.ItemDataRole.UserRole)
+                                if isinstance(ch_params, dict):
+                                    method = str(ch_params.get("method") or "").lower()
+                                    if method in ("rtu", "serial"):
+                                        is_serial_poll = True
+                                    if not is_serial_poll and any(k in ch_params for k in ("com", "adapter", "serial_port")):
+                                        is_serial_poll = True
+                                    if is_serial_poll:
+                                        serial_meta["port"] = ch_params.get("com") or ch_params.get("adapter") or ch_params.get("serial_port") or ""
+                                        serial_meta["baud"] = ch_params.get("baud") or ch_params.get("baudrate") or ""
+                                        serial_meta["parity"] = ch_params.get("parity") or ""
+                                        serial_meta["bytesize"] = ch_params.get("bytesize") or ch_params.get("data_bits") or ch_params.get("databits") or ""
+                                        serial_meta["stopbits"] = ch_params.get("stopbits") or ch_params.get("stop_bits") or ch_params.get("stop") or ""
+                                        flow = ch_params.get("flow") or ch_params.get("flow_control") or ""
+                                        if not flow:
+                                            if ch_params.get("xonxoff"):
+                                                flow = "xonxoff"
+                                            elif ch_params.get("rtscts") and ch_params.get("dsrdtr"):
+                                                flow = "rtscts+dsrdtr"
+                                            elif ch_params.get("rtscts"):
+                                                flow = "rtscts"
+                                            elif ch_params.get("dsrdtr"):
+                                                flow = "dsrdtr"
+                                        serial_meta["flow"] = flow
+                    setattr(poller, '_is_serial', bool(is_serial_poll))
+                    setattr(poller, '_serial_params', serial_meta)
+                except Exception:
+                    # safe fallback: leave attributes unset if anything goes wrong
+                    pass
                 # attach a lightweight connection key for runtime matching
                 try:
                     setattr(poller, '__conn_key__', (h, pnum, u, inv))

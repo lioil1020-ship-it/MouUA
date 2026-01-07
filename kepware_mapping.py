@@ -92,6 +92,29 @@ def map_kepware_to_pymodbus(driver_name: str, ch_params: dict, encoding: dict, b
         # allow explicit framer override
         if (ch_params or {}).get("framer") is not None:
             client_params["framer"] = (ch_params or {}).get("framer")
+        # map flow control UI values to pyserial flags
+        try:
+            flow_val = (ch_params or {}).get("flow")
+            if flow_val is not None:
+                fv = str(flow_val).strip().lower()
+                if fv == "" or fv == "none":
+                    pass
+                else:
+                    # XON/XOFF textual match
+                    if "xon" in fv or "xonxoff" in fv:
+                        client_params["xonxoff"] = True
+                    # Both RTS and DTR requested
+                    if "rts" in fv and "dtr" in fv:
+                        client_params["rtscts"] = True
+                        client_params["dsrdtr"] = True
+                    # RTS variants
+                    elif "rts" in fv:
+                        client_params["rtscts"] = True
+                    # DTR only
+                    elif "dtr" in fv:
+                        client_params["dsrdtr"] = True
+        except Exception:
+            pass
         # host_local not used for RTU
         host_local = None
         port_local = None

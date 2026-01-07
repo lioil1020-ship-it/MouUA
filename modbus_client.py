@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import traceback
 from typing import Optional, Any
 
 ModbusTcpClient = None
@@ -36,13 +37,13 @@ class ModbusClient:
     Constructor signature matches callers in this project.
     """
 
-    def __init__(self, mode: str = "tcp", host: str | None = None, port: int = 502, unit: int = 1, connect_timeout: float = 3.0, request_timeout: float = 1.0, diag_callback: Optional[Any] = None, **kwargs):
+    def __init__(self, mode: str = "tcp", host: str | None = None, port: int = 502, unit: int = 1, connect_timeout: float = 3.0, request_timeout: float = 2.0, diag_callback: Optional[Any] = None, **kwargs):
         self.mode = (mode or "tcp").lower()
         self.host = host
         self.port = port
         self.unit = int(unit or 1)
         self.connect_timeout = float(connect_timeout or 3.0)
-        self.request_timeout = float(request_timeout or 1.0)
+        self.request_timeout = float(request_timeout or 2.0)
         self.kwargs = kwargs or {}
         self._client = None
         self.diag_callback = diag_callback
@@ -148,47 +149,161 @@ class ModbusClient:
                 raise ImportError("pymodbus is required for ModbusClient (RTU).")
 
             def _sync():
-                # construct serial params
+                # construct and normalize serial params
                 ser_port = self.kwargs.get("serial_port") or self.kwargs.get("port") or self.host
-                base_kw = {"port": ser_port, "baudrate": int(self.kwargs.get("baudrate", 9600)), "timeout": self.request_timeout}
-                # ensure common unit/slave defaults are passed to serial client when possible
                 try:
-                    base_kw.update({
-                        "unit": int(self.unit),
-                        "slave": int(self.unit),
-                        "unit_id": int(self.unit),
-                        "slave_id": int(self.unit),
-                        "default_unit": int(self.unit),
-                    })
+                    if isinstance(ser_port, str):
+                        s = ser_port.strip()
+                        # numeric like '3' -> 'COM3'
+                        if s.isdigit():
+                            ser_port = f"COM{int(s)}"
+                        else:
+                            # normalize 'com3' -> 'COM3'
+                            import re
+
+                            m = re.match(r"(?i)^com(\d+)$", s)
+                            if m:
+                                ser_port = f"COM{int(m.group(1))}"
+                            else:
+                                ser_port = s
+                    else:
+                        # try converting numeric values
+                        if isinstance(ser_port, (int, float)):
+                            ser_port = f"COM{int(ser_port)}"
                 except Exception:
                     pass
-                for k in ("parity", "stopbits", "bytesize", "rtscts", "xonxoff", "method"):
+
+                # build kwargs for serial client
+                base_kw = {"port": ser_port, "baudrate": int(self.kwargs.get("baudrate", 9600)), "timeout": self.request_timeout}
+                # Do NOT pass unit/slave identifiers into the serial client's
+                # constructor kwargs — some pymodbus serial client constructors
+                # do not accept those keyword args and will raise TypeError.
+                # Instead, we'll set these as attributes on the instantiated
+                # client object after construction (if the object supports them).
+
+                # forward common serial args including framer (but NOT 'method')
+                # Some pymodbus serial client constructors do not accept a
+                # 'method' keyword and will raise TypeError; avoid passing it.
+                for k in ("parity", "stopbits", "bytesize", "rtscts", "xonxoff", "framer"):
                     if k in self.kwargs:
                         base_kw[k] = self.kwargs[k]
-                # When possible, pass `trace_packet` to the serial client as
-                # a fallback callback. Many serial client wrappers accept it.
+
+                # keep a local method string for diagnostics/framer selection
+                try:
+                    md = self.kwargs.get("method", "rtu")
+                except Exception:
+                    md = "rtu"
+
+                # resolve framer string names to class objects when provided
+                try:
+                    frv = base_kw.get('framer', None)
+                    if isinstance(frv, str) and frv:
+                        try:
+                            from pymodbus.framer.rtu_framer import ModbusRtuFramer as _ModbusRtuFramer
+                            base_kw['framer'] = _ModbusRtuFramer
+                        except Exception:
+                            try:
+                                from pymodbus.transaction import ModbusRtuFramer as _ModbusRtuFramer
+                                base_kw['framer'] = _ModbusRtuFramer
+                            except Exception:
+                                # leave as-is (string) if resolution fails
+                                pass
+                except Exception:
+                    pass
+
+                # When possible, pass `trace_packet` to the serial client as a fallback
                 try:
                     if self.diag_callback:
                         base_kw["trace_packet"] = self._trace_packet
                 except Exception:
                     pass
+
+                # Quick pyserial sanity-check: attempt to open the port directly
+                # This helps distinguish constructor API mismatches from OS/permission/port errors.
+                try:
+                    try:
+                        from serial import Serial as _Serial  # type: ignore
+                        _sp = None
+                        try:
+                            _sp = _Serial(port=ser_port, baudrate=base_kw.get('baudrate'), timeout=base_kw.get('timeout'))
+                            try:
+                                _sp.close()
+                            except Exception:
+                                pass
+                            if self.diag_callback:
+                                try:
+                                    self.diag_callback(f"SERIAL PORT TEST: port={ser_port} open_ok=True")
+                                except Exception:
+                                    pass
+                        except Exception:
+                            if self.diag_callback:
+                                try:
+                                    self.diag_callback(f"SERIAL PORT TEST: port={ser_port} open_ok=False err={traceback.format_exc().splitlines()[-1]}")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        # pyserial not available or import failed; skip test
+                        if self.diag_callback:
+                            try:
+                                self.diag_callback("SERIAL PORT TEST: pyserial unavailable; skipped")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+                # instantiate serial client with robust exception capture
+                inst_exc = None
                 try:
                     self._client = ModbusSerialClient(**base_kw)
-                except TypeError:
-                    # try without 'method'
-                    alt = {kk: vv for kk, vv in base_kw.items() if kk != "method"}
+                except Exception:
+                    inst_exc = traceback.format_exc()
+                    # try without 'method'/'framer' if constructor doesn't accept them
                     try:
+                        alt = {kk: vv for kk, vv in base_kw.items() if kk not in ("method", "framer")}
                         self._client = ModbusSerialClient(**alt)
                     except Exception:
-                        self._client = ModbusSerialClient(ser_port)
-                # serial connect: many clients open on first use; call connect()
+                        try:
+                            # some pymodbus versions expect an explicit 'method' keyword
+                            try_method_kw = {"method": md, "port": ser_port, "baudrate": base_kw.get("baudrate"), "timeout": base_kw.get("timeout")}
+                            for kk in ("parity", "stopbits", "bytesize", "rtscts", "xonxoff"):
+                                if kk in base_kw:
+                                    try_method_kw[kk] = base_kw[kk]
+                            self._client = ModbusSerialClient(**try_method_kw)
+                        except Exception:
+                            try:
+                                # minimal positional fallback
+                                self._client = ModbusSerialClient(ser_port)
+                            except Exception:
+                                # final fallback - leave client as None and record inst_exc
+                                if not inst_exc:
+                                    inst_exc = traceback.format_exc()
+                                self._client = None
+
+                # After we have an instantiated client object, set common
+                # unit/slave-like attributes on the object (if supported).
                 try:
-                    ok = self._client.connect()
+                    if self._client is not None:
+                        for _attr in ("unit", "slave", "unit_id", "slave_id", "device_id", "device", "default_unit"):
+                            try:
+                                setattr(self._client, _attr, int(self.unit))
+                            except Exception:
+                                pass
                 except Exception:
-                    ok = True
+                    pass
+
+                # serial connect: many clients open on first use; call connect() and capture exceptions
+                conn_exc = None
+                ok = False
+                try:
+                    if self._client is not None:
+                        ok = bool(self._client.connect())
+                except Exception:
+                    conn_exc = traceback.format_exc()
+                    ok = False
+
                 # install serial/socket wrappers if available
                 try:
-                    if ok and self.diag_callback and getattr(self, '_trace_installer', None):
+                    if ok and self.diag_callback and getattr(self, '_trace_installer', None) and self._client is not None:
                         try:
                             self._trace_installer(self._client, self.diag_callback)
                             self._trace_enabled = True
@@ -196,6 +311,38 @@ class ModbusClient:
                             pass
                 except Exception:
                     pass
+
+                # emit diagnostic about serial connect attempt
+                try:
+                    if self.diag_callback:
+                        try:
+                            fr = self.kwargs.get('framer', None)
+                            msg = f"SERIAL CONNECT: port={ser_port} baud={base_kw.get('baudrate')} timeout={self.request_timeout} method={md} framer={fr} ok={ok}"
+                            try:
+                                if self._client is not None:
+                                    msg += f" client={type(self._client).__name__}"
+                            except Exception:
+                                pass
+                            # append exception info if instantiation or connect raised
+                            try:
+                                if inst_exc:
+                                    msg += f" inst_exc=" + inst_exc.splitlines()[-1]
+                            except Exception:
+                                pass
+                            try:
+                                if conn_exc:
+                                    msg += f" conn_exc=" + conn_exc.splitlines()[-1]
+                            except Exception:
+                                pass
+                            self.diag_callback(msg)
+                        except Exception:
+                            try:
+                                self.diag_callback("SERIAL CONNECT: attempted")
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
                 return ok
 
             return await asyncio.to_thread(_sync)
@@ -244,7 +391,17 @@ class ModbusClient:
                 try:
                     return method(**kw)
                 except Exception:
-                    pass
+                    # emit a concise diagnostic about the failed kw call
+                    try:
+                        if getattr(self, 'diag_callback', None):
+                            try:
+                                self.diag_callback(
+                                    f"CALL_FAIL: method={getattr(method, '__name__', repr(method))} kwargs={kw} exc={traceback.format_exc().splitlines()[-1]}"
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -279,15 +436,35 @@ class ModbusClient:
         except Exception:
             pass
 
-        for attempt in (
-            lambda: method(address, count, unit=self.unit),
-            lambda: method(address, count, slave=self.unit),
-            lambda: method(address, count),
-            lambda: method(count, address),
-        ):
+        # Broad set of fallback call patterns to accommodate differing
+        # pymodbus client signatures across versions/wrappers.
+        attempts = (
+            ("pos_unit_kw", lambda: method(address, count, unit=self.unit)),
+            ("pos_slave_kw", lambda: method(address, count, slave=self.unit)),
+            ("pos_unit_pos", lambda: method(address, count, self.unit)),
+            ("pos_unit_pos_no_resp", lambda: method(address, count, self.unit, False)),
+            ("simple_pos", lambda: method(address, count)),
+            ("swapped_pos", lambda: method(count, address)),
+            ("device_id_no_resp_false", lambda: method(address, count, device_id=self.unit, no_response_expected=False)),
+            ("device_id_no_resp_true", lambda: method(address, count, device_id=self.unit, no_response_expected=True)),
+            ("addr_count_bool", lambda: method(address, count, False)),
+            ("device_id_only", lambda: method(address, count, device_id=self.unit)),
+        )
+        for i, (name, attempt) in enumerate(attempts, start=1):
             try:
                 return attempt()
             except Exception:
+                # log each fallback failure concisely to aid diagnosis
+                try:
+                    if getattr(self, 'diag_callback', None):
+                        try:
+                            self.diag_callback(
+                                f"FALLBACK_FAIL[{i}:{name}]: method={getattr(method, '__name__', repr(method))} exc={traceback.format_exc().splitlines()[-1]}"
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 continue
         raise RuntimeError("Unable to call modbus method")
 

@@ -6,8 +6,8 @@
       "text": "Channel3",
       "driver": "Modbus RTU Serial",
       "params": {
-        "baud": "57600",
-        "com": "COM7",
+        "baud": "115200",
+        "com": "COM2",
         "data_bits": "8",
         "flow": "None",
         "parity": "None",
@@ -22,8 +22,8 @@
           "description": "DCB-106",
           "timing": {
             "attempts": "1",
-            "inter_req_delay": "100",
-            "req_timeout": "1000"
+            "inter_req_delay": "3000",
+            "req_timeout": "2000"
           },
           "data_access": {
             "bit_writes": "Disable",
