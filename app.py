@@ -30,6 +30,7 @@ from ui.dragdrop_tree import ConnectivityTree
 from dialogs.channel_dialog import ChannelDialog
 from dialogs.device_dialog import DeviceDialog
 from dialogs.tag_dialog import TagDialog
+from dialogs.opcua_dialog import OPCUADialog
 from clipboard import ClipboardManager
 from controllers import AppController
 from modbus_worker import AsyncPoller
@@ -415,19 +416,23 @@ class IoTApp(QMainWindow):
         save_action.triggered.connect(self.save_project)
         save_as_action.triggered.connect(self.save_project_as)
 
-        # --- Runtime menu ---
-        runtime_menu = self.menuBar().addMenu("🟢 Runtime")
-        # keep a reference so we can toggle the indicator when runtime starts/stops
-        self.runtime_menu = runtime_menu
-        start_action = runtime_menu.addAction("▶️ Start")
-        stop_action = runtime_menu.addAction("⏹️ Stop")
-        start_action.triggered.connect(self.start_runtime)
-        stop_action.triggered.connect(self.stop_runtime)
+        # --- Runtime indicator/action (click to toggle start/stop) ---
+        runtime_indicator = QAction("🟢 Runtime", self)
+        runtime_indicator.triggered.connect(self.toggle_runtime)
+        # add as a top-level action (appears on the menu bar like a menu title)
+        self.menuBar().addAction(runtime_indicator)
+        # keep reference so we can update the indicator text/color emoji
+        self.runtime_indicator_action = runtime_indicator
         
         # --- Diagnostics button (直接彈出) ---
         terminal_action = QAction("📊 Diagnostics", self)
         terminal_action.triggered.connect(self.show_terminal_window)
         self.menuBar().addAction(terminal_action)
+
+        # --- OPC UA button (open settings) ---
+        opcua_action = QAction("🔗 OPC UA", self)
+        opcua_action.triggered.connect(self.open_opcua_settings)
+        self.menuBar().addAction(opcua_action)
 
         # 初始化焦點選取在 Connectivity 節點
         self.tree.setCurrentItem(self.tree.conn_node)
@@ -1393,7 +1398,10 @@ class IoTApp(QMainWindow):
         """啟動 Runtime - 自動添加所有 tag 到 monitor 並開始輪詢"""
         # 更新 runtime 指示為紅色 (running)
         try:
-            self.runtime_menu.setTitle("🔴 Runtime")
+            try:
+                self.runtime_indicator_action.setText("🔴 Runtime")
+            except Exception:
+                pass
         except Exception:
             pass
         # 先添加所有 tag 到 monitor
@@ -1405,7 +1413,10 @@ class IoTApp(QMainWindow):
         """停止 Runtime"""
         # 更新 runtime 指示為綠色 (stopped)
         try:
-            self.runtime_menu.setTitle("🟢 Runtime")
+            try:
+                self.runtime_indicator_action.setText("🟢 Runtime")
+            except Exception:
+                pass
         except Exception:
             pass
         self.stop_polling()
@@ -1415,6 +1426,38 @@ class IoTApp(QMainWindow):
         self.monitor_counts.clear()
         self.monitor_last_values.clear()
         self.monitored_tags.clear()
+
+    def toggle_runtime(self):
+        """Toggle runtime state: start if stopped, stop if running."""
+        try:
+            running = any(getattr(p, '_running', False) for p in self.pollers)
+        except Exception:
+            running = False
+        try:
+            if running:
+                self.stop_runtime()
+            else:
+                self.start_runtime()
+        except Exception:
+            pass
+
+    def open_opcua_settings(self):
+        try:
+            initial = getattr(self, 'opcua_settings', None) or {}
+            dlg = OPCUADialog(self, initial=initial)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                vals = dlg.values()
+                # store settings on the main window for later use
+                self.opcua_settings = vals
+                try:
+                    self.append_diagnostic(f"OPC UA settings saved: {vals}")
+                except Exception:
+                    pass
+        except Exception as e:
+            try:
+                self.append_diagnostic(f"Failed to open OPC UA settings: {e}")
+            except Exception:
+                pass
 
     def add_all_tags_to_monitor(self):
         """添加所有 tag 到 monitor 視窗"""
