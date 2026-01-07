@@ -1,0 +1,147 @@
+{
+  "type": "Project",
+  "channels": [
+    {
+      "type": "Channel",
+      "text": "Channel1",
+      "driver": "Modbus TCP/IP Ethernet",
+      "params": {
+        "adapter": "Default"
+      },
+      "description": "PTW",
+      "children": [
+        {
+          "type": "Device",
+          "text": "Device1",
+          "device_id": 1,
+          "description": "",
+          "timing": {
+            "attempts": "1",
+            "connect_timeout": "3",
+            "inter_req_delay": "1000",
+            "req_timeout": "1000"
+          },
+          "data_access": {
+            "bit_writes": "Disable",
+            "func_05": "Enable",
+            "func_06": "Enable",
+            "zero_based": "Disable",
+            "zero_based_bit": "Enable"
+          },
+          "encoding": {
+            "bit_order": "Disable",
+            "byte_order": "Enable",
+            "dword_low": "Enable",
+            "treat_long": "Disable",
+            "word_low": "Enable"
+          },
+          "block_sizes": {
+            "hold_regs": 120,
+            "in_coils": 2000,
+            "int_regs": 120,
+            "out_coils": 2000
+          },
+          "ethernet": {
+            "ip": "192.168.11.10",
+            "port": "502",
+            "protocol": "TCP/IP"
+          },
+          "children": [
+            {
+              "type": "Tag",
+              "text": "MF",
+              "address": "400095 [25]",
+              "data_type": "Float(Array)",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read/Write",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "Channel",
+      "text": "Channel2",
+      "driver": "Modbus TCP/IP Ethernet",
+      "params": {
+        "adapter": "Default"
+      },
+      "description": "LiBoDe",
+      "children": [
+        {
+          "type": "Device",
+          "text": "Device1",
+          "device_id": 1,
+          "description": "",
+          "timing": {
+            "attempts": "1",
+            "connect_timeout": "3",
+            "inter_req_delay": "1000",
+            "req_timeout": "1000"
+          },
+          "data_access": {
+            "bit_writes": "Disable",
+            "func_05": "Enable",
+            "func_06": "Enable",
+            "zero_based": "Disable",
+            "zero_based_bit": "Enable"
+          },
+          "encoding": {
+            "bit_order": "Disable",
+            "byte_order": "Enable",
+            "dword_low": "Enable",
+            "treat_long": "Disable",
+            "word_low": "Enable"
+          },
+          "block_sizes": {
+            "hold_regs": 120,
+            "in_coils": 2000,
+            "int_regs": 120,
+            "out_coils": 2000
+          },
+          "ethernet": {
+            "ip": "192.168.25.10",
+            "port": "502",
+            "protocol": "TCP/IP"
+          },
+          "children": [
+            {
+              "type": "Tag",
+              "text": "MF",
+              "address": "400106 [12]",
+              "data_type": "Float(Array)",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read/Write",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
