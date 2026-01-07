@@ -1,43 +1,44 @@
-# 使用方法：在安裝 Git 後，以 PowerShell 執行此檔案（在 E:\py\ModUA 目錄下）
-# 先確認已設定 git user.name 與 user.email，且已登入 GitHub 或已設定 SSH key
+#!/usr/bin/env pwsh
+# Usage: run this PowerShell script from the project root to push changes to GitHub.
+# Make sure git is installed and you have configured user.name/user.email and authentication (PAT or SSH).
 
 Set-Location -Path "$PSScriptRoot"
 
-Write-Host "== 初始化 Git 倉庫（若尚未初始化） =="
+Write-Host "== Initialize git repository (if needed) =="
 if (-not (Test-Path .git)) {
     git init
 } else {
-    Write-Host ".git 已存在，跳過 git init"
+    Write-Host ".git exists, skipping git init"
 }
 
-Write-Host "== 新增 .gitignore 並加入所有檔案 =="
+Write-Host "== Add files to index =="
 git add .gitignore
 git add .
 
-Write-Host "== 嘗試提交（若無變更則跳過） =="
+Write-Host "== Try to commit (will skip if no changes) =="
 try {
-    git commit -m 'Initial commit' -q
-    Write-Host "Commit 完成。"
+    git commit -m 'Update repository' -q
+    Write-Host "Commit completed."
 } catch {
-    Write-Host "沒有可提交的變更或 commit 失敗： $_"
+    Write-Host "No changes to commit or commit failed: $_"
 }
 
-Write-Host "== 設定主分支名稱為 main =="
+Write-Host "== Ensure main branch name =="
 git branch -M main
 
-Write-Host "== 設定 remote origin 並推送 =="
+Write-Host "== Configure remote origin and push =="
 $remoteUrl = 'https://github.com/lioil1020-ship-it/MouUA.git'
 try {
     git remote remove origin 2>$null
 } catch { }
 git remote add origin $remoteUrl
 
-Write-Host "準備推送到 $remoteUrl -- 可能會要求輸入 GitHub 認證（PAT）或使用 SSH。"
+Write-Host "Pushing to $remoteUrl (you may be prompted for credentials)..."
 git push -u origin main
 
-Write-Host "== 顯示遠端與最近提交資訊 =="
+Write-Host "== Remote and recent commit info =="
 git remote -v
 git log -1 --pretty=oneline
 git status
 
-Write-Host "執行結束。若推送失敗，請檢查 Git 是否已登入或使用 PAT/SSH。"
+Write-Host "Done. If push failed, check git authentication (PAT or SSH)."
