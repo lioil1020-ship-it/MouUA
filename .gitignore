@@ -63,3 +63,7 @@ venv.bak/
 
 # SSL keys
 *.pem
+
+# Local downloads / installers
+Git-Installer.exe
+*.exe
