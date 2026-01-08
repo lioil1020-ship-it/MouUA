@@ -148,8 +148,10 @@
     "application_Name": "ModUA",
     "host_name": "ModUA",
     "namespace": "ModUA",
-    "port": "48480",
-    "product_uri": "opc.tcp://192.168.1.101:48480",
+    "port": "48484",
+    "product_uri": "opc.tcp://192.168.1.101:48484",
+    "network_adapter": "乙太網路 - 192.168.1.101",
+    "network_adapter_ip": "192.168.1.101",
     "max_sessions": "4096",
     "publish_interval": "1000",
     "authentication": "Anonymous",
@@ -168,6 +170,7 @@
     "policy_encrypt_aes128": false,
     "policy_encrypt_aes256": false,
     "policy_encrypt_basic256sha256": false,
-    "auto_generate": true
+    "auto_generate": true,
+    "auto_start": false
   }
 }

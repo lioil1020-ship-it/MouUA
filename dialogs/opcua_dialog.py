@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 import socket
 from PyQt6.QtCore import Qt
 from ui.widgets.form_builder import FormBuilder
+import psutil
 
 class OPCUADialog(QDialog):
     def __init__(self, parent=None, initial=None):
@@ -47,6 +48,21 @@ class OPCUADialog(QDialog):
         self.settings_form.add_field('product_uri', 'Product URI(End Point)')
         # 將 Product URI 顯示為靜態文字（用 QLabel 替換輸入框）
         self._setup_product_uri_display()
+        # Network adapter selector (combo). We'll populate with adapter names and IPv4 addresses
+        self.settings_form.add_field('network_adapter', 'Network Adapter', field_type='combo', options=[])
+        # keep a hidden field for adapter ip so values() returns it
+        from PyQt6.QtWidgets import QLineEdit
+        self._adapter_ip_hidden = QLineEdit()
+        self._adapter_ip_hidden.setVisible(False)
+        self.settings_form.fields['network_adapter_ip'] = self._adapter_ip_hidden
+        # Auto-start checkbox (do not use FormBuilder because it doesn't support checkboxes)
+        from PyQt6.QtWidgets import QCheckBox
+        self.auto_start_checkbox = QCheckBox('Auto Start OPC UA Server on application startup')
+        try:
+            self.auto_start_checkbox.setChecked(False)
+        except Exception:
+            pass
+        self.settings_form.layout.addRow('', self.auto_start_checkbox)
         self.settings_form.add_field('max_sessions', 'Max Sessions')
         self.settings_form.add_field('publish_interval', 'Publish Interval (ms)')
         
@@ -196,26 +212,130 @@ class OPCUADialog(QDialog):
             pass
 
     def _update_endpoint_label(self):
-        """即時計算並顯示 opc.tcp 連線字串"""
+        """即時計算並顯示 opc.tcp 連線字串，優先使用選取的 network adapter IP。"""
         try:
             vals = self.settings_form.get_values()
-            host = (vals.get('host_name') or '').strip()
+            # prefer selected network adapter IP; fall back to host_name or auto-detect
+            host = ''
+            try:
+                na_widget = self.settings_form.fields.get('network_adapter')
+                if na_widget and hasattr(na_widget, 'currentData'):
+                    ipdata = na_widget.currentData()
+                    if ipdata:
+                        host = str(ipdata).strip()
+                if not host:
+                    host = (vals.get('network_adapter_ip') or '').strip()
+            except Exception:
+                host = ''
+            if not host:
+                host = (vals.get('host_name') or '').strip()
             port = (vals.get('port') or '').strip()
+
             def _get_ip():
                 try:
                     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     s.settimeout(0.2); s.connect(('8.8.8.8', 80))
                     ip = s.getsockname()[0]; s.close(); return ip
                 except: return '127.0.0.1'
-            h = _get_ip() if not host or host.lower() in ('localhost', '127.0.0.1', 'modua') else host
+
+            # if host resolves to loopback or is empty, auto-detect a LAN IP
+            try:
+                if not host or host.lower() in ('localhost', '127.0.0.1', 'modua'):
+                    h = _get_ip()
+                else:
+                    h = host
+            except Exception:
+                h = _get_ip()
+
+            # expose chosen adapter ip in hidden field for persistence
+            try:
+                if hasattr(self, '_adapter_ip_hidden'):
+                    self._adapter_ip_hidden.setText(h)
+            except Exception:
+                pass
+
             if hasattr(self, 'endpoint_display'):
                 self.endpoint_display.setText(f"opc.tcp://{h}:{port if port else '48480'}")
         except: pass
 
     def _connect_endpoint_updaters(self):
-        for k in ['host_name', 'port']:
+        # update when port changes or network adapter selection changes
+        for k in ['host_name', 'port', 'network_adapter']:
             w = self.settings_form.fields.get(k)
-            if w: w.textChanged.connect(self._update_endpoint_label)
+            try:
+                if hasattr(w, 'textChanged'):
+                    w.textChanged.connect(self._update_endpoint_label)
+                elif hasattr(w, 'currentIndexChanged'):
+                    w.currentIndexChanged.connect(self._on_adapter_changed)
+            except Exception:
+                pass
+        # initially populate adapters
+        try:
+            self._populate_adapters()
+        except Exception:
+            pass
+
+    def _on_adapter_changed(self, idx=None):
+        try:
+            na = self.settings_form.fields.get('network_adapter')
+            if na and hasattr(na, 'currentData'):
+                ip = na.currentData()
+                try:
+                    self._adapter_ip_hidden.setText(str(ip or ''))
+                except Exception:
+                    pass
+            self._update_endpoint_label()
+        except Exception:
+            pass
+
+    def _populate_adapters(self):
+        """Populate the network adapter combo with available IPv4 addresses using psutil."""
+        try:
+            na_widget = self.settings_form.fields.get('network_adapter')
+            if na_widget is None:
+                return
+            try:
+                na_widget.clear()
+            except Exception:
+                pass
+            infos = psutil.net_if_addrs()
+            for ifname, addrs in infos.items():
+                for a in addrs:
+                    try:
+                        fam = getattr(a, 'family', None)
+                        if fam and (getattr(fam, 'name', '').endswith('AF_INET') or fam == 2):
+                            ip = a.address
+                            if ip and not ip.startswith('127.'):
+                                display = f"{ifname} - {ip}"
+                                na_widget.addItem(display, ip)
+                    except Exception:
+                        try:
+                            ip = getattr(a, 'address', None) or str(a)
+                            if ip and ':' not in ip and not ip.startswith('127.'):
+                                display = f"{ifname} - {ip}"
+                                na_widget.addItem(display, ip)
+                        except Exception:
+                            pass
+            if na_widget.count() == 0:
+                detected = None
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.settimeout(0.2); s.connect(('8.8.8.8', 80)); detected = s.getsockname()[0]; s.close()
+                except Exception:
+                    detected = '127.0.0.1'
+                na_widget.addItem(f"Auto - {detected}", detected)
+            try:
+                vals = self.settings_form.get_values()
+                target = vals.get('network_adapter_ip') or None
+                if target:
+                    idx = na_widget.findData(target)
+                    if idx >= 0:
+                        na_widget.setCurrentIndex(idx)
+                        self._adapter_ip_hidden.setText(str(target))
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _apply_defaults(self, initial):
         defaults = {
@@ -234,6 +354,7 @@ class OPCUADialog(QDialog):
             'cert_validity': '20',
             # 其他預設
             'max_sessions': '4096', 'publish_interval': '1000'
+            , 'auto_start': False
         }
         self.set_values(defaults)
         if initial: self.set_values(initial)
@@ -259,6 +380,10 @@ class OPCUADialog(QDialog):
         for k, cb in self.sec_checkboxes.items():
             out[k] = cb.isChecked()
         out['auto_generate'] = self.auto_generate.isChecked()
+        try:
+            out['auto_start'] = bool(self.auto_start_checkbox.isChecked())
+        except Exception:
+            out['auto_start'] = False
         if hasattr(self, 'endpoint_display'):
             out['product_uri'] = self.endpoint_display.text()
         return out

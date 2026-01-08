@@ -72,6 +72,15 @@ class AppController:
         # attach model
         model = ChannelModel.from_dict(data)
         item.setData(0, Qt.ItemDataRole.UserRole + 1, model)
+        try:
+            # mark app as dirty (unsaved changes)
+            if hasattr(self.app, '_mark_dirty'):
+                try:
+                    self.app._mark_dirty(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return model
 
     def save_device(self, item, data):
@@ -131,6 +140,14 @@ class AppController:
             item.setData(8, Qt.ItemDataRole.UserRole, data.get("ethernet"))
         model = DeviceModel.from_dict(data)
         item.setData(0, Qt.ItemDataRole.UserRole + 1, model)
+        try:
+            if hasattr(self.app, '_mark_dirty'):
+                try:
+                    self.app._mark_dirty(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return model
 
     def save_tag(self, item, data):
@@ -172,6 +189,14 @@ class AppController:
             pass
         model = TagModel.from_dict(data)
         item.setData(0, Qt.ItemDataRole.UserRole + 1, model)
+        try:
+            if hasattr(self.app, '_mark_dirty'):
+                try:
+                    self.app._mark_dirty(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return model
 
     def load_model(self, item):

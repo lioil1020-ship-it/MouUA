@@ -81,12 +81,26 @@ class OPCServer:
             except Exception:
                 display_host = '127.0.0.1'
 
-        # 實際 bind 到所有介面
+        # determine bind/display host
         bind_host = '0.0.0.0'
         port = int(self.config.get('port', 48480))
         namespace = self.config.get('namespace', app_name)
 
-        # 記錄顯示用 host，啟動後列出 endpoints 時會用此 host 替代 0.0.0.0
+        # If UI provided a specific network adapter IP, prefer that for binding/display
+        try:
+            na_ip = (self.config.get('network_adapter_ip') or '').strip()
+            import ipaddress
+            if na_ip:
+                try:
+                    ipaddress.ip_address(na_ip)
+                    bind_host = na_ip
+                    display_host = na_ip
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 記錄顯示用 host
         self._display_host = display_host
         self._server.set_endpoint(f"opc.tcp://{bind_host}:{port}")
         self._server.set_server_name(app_name)
@@ -99,41 +113,26 @@ class OPCServer:
     def start(self):
         if self._is_running:
             return
-        self._prepare_server()
+        # prepare if needed
+        if self._server is None:
+            self._prepare_server()
 
-        def run():
+        # try to start synchronously so callers can immediately observe success/failure
+        try:
+            self._server.start()
+        except Exception:
+            # If synchronous start fails, ensure we don't leave inconsistent state
             try:
-                try:
-                    self._server.start()
-                    # 印出已註冊的 endpoints 與應用資訊，方便診斷客戶端連線問題
-                    try:
-                        eps = self._server.get_endpoints()
-                        print("OPC UA endpoints:")
-                        for e in eps:
-                            try:
-                                url = getattr(e, 'EndpointUrl', str(e))
-                                # if server bound to 0.0.0.0, present detected LAN IP for discovery readability
-                                try:
-                                    if isinstance(self._display_host, str) and '0.0.0.0' in url:
-                                        url = url.replace('0.0.0.0', self._display_host)
-                                except Exception:
-                                    pass
-                                policy = getattr(e, 'SecurityPolicyUri', getattr(e, 'securityPolicyUri', ''))
-                                mode = getattr(e, 'securityMode', '')
-                                print(f"  URL: {url}  Policy: {policy}  Mode: {mode}")
-                            except Exception:
-                                print(f"  endpoint: {e}")
-                    except Exception:
-                        # 若 server.get_endpoints 不可用，嘗試印出 product/application uri
-                        try:
-                            print(f"OPC UA application uri: {getattr(self._server, 'application_uri', 'N/A')}")
-                        except Exception:
-                            pass
-                except socket.gaierror as e:
-                    # host 名稱解析錯誤等網路層問題，記錄並安全地停止此執行緒
-                    print(f"OPC UA 無法啟動伺服器: {e}")
-                    return
-                self._is_running = True
+                self._server.stop()
+            except Exception:
+                pass
+            raise
+
+        # if start() succeeded, mark running and spawn a background thread to keep server alive
+        self._is_running = True
+
+        def run_monitor():
+            try:
                 while self._is_running:
                     time.sleep(0.5)
             finally:
@@ -142,8 +141,34 @@ class OPCServer:
                 except Exception:
                     pass
 
-        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread = threading.Thread(target=run_monitor, daemon=True)
         self._thread.start()
+
+    def get_endpoints(self):
+        """Return list of endpoint URL strings for diagnostics."""
+        out = []
+        try:
+            eps = self._server.get_endpoints()
+            for e in eps:
+                try:
+                    url = getattr(e, 'EndpointUrl', str(e))
+                    try:
+                        if isinstance(self._display_host, str) and '0.0.0.0' in url:
+                            url = url.replace('0.0.0.0', self._display_host)
+                    except Exception:
+                        pass
+                    out.append(str(url))
+                except Exception:
+                    try:
+                        out.append(str(e))
+                    except Exception:
+                        pass
+        except Exception:
+            try:
+                out.append(str(getattr(self._server, 'application_uri', 'N/A')))
+            except Exception:
+                pass
+        return out
 
     def stop(self):
         self._is_running = False
@@ -169,7 +194,18 @@ class OPCServer:
         folder = self._objects
         # Use a simple flat node: Objects -> name
         var = folder.add_variable(self._nsidx, name, 0)
-        var.set_writable(True)
+        # set writable according to provided meta (client access)
+        try:
+            access = tag_meta.get('access') or tag_meta.get('client_access') or ''
+            if isinstance(access, str) and 'read' in access.lower() and 'write' not in access.lower():
+                var.set_writable(False)
+            else:
+                var.set_writable(True)
+        except Exception:
+            try:
+                var.set_writable(True)
+            except Exception:
+                pass
 
         # 嘗試根據 dtype 設定典型 UA 型別（簡易對應）
         try:
@@ -205,7 +241,17 @@ class OPCServer:
                 tag_name = tag.get('name') or tag_id
                 dtype = tag.get('data_type') or 'Int'
                 node = dev_node.add_variable(self._nsidx, tag_name, 0)
-                node.set_writable(True)
+                try:
+                    access = tag.get('access') or tag.get('client_access') or ''
+                    if isinstance(access, str) and 'read' in access.lower() and 'write' not in access.lower():
+                        node.set_writable(False)
+                    else:
+                        node.set_writable(True)
+                except Exception:
+                    try:
+                        node.set_writable(True)
+                    except Exception:
+                        pass
                 try:
                     if 'float' in str(dtype).lower():
                         node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
@@ -292,7 +338,15 @@ class OPCServer:
                                     node = dev_node.add_variable(self._nsidx, tag_name, init_val)
                                 else:
                                     node = dev_node.add_variable(self._nsidx, tag_name, 0)
-                                node.set_writable(True)
+                                # set writable based on Tag's client access (slot 9) if available
+                                try:
+                                    access_val = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
+                                except Exception:
+                                    access_val = None
+                                if isinstance(access_val, str) and 'read' in access_val.lower() and 'write' not in access_val.lower():
+                                    node.set_writable(False)
+                                else:
+                                    node.set_writable(True)
                                 try:
                                     if 'float' in str(dtype).lower():
                                         node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
@@ -304,7 +358,14 @@ class OPCServer:
                                     pass
                             except Exception:
                                 node = dev_node.add_variable(self._nsidx, tag_name, 0)
-                                node.set_writable(True)
+                                try:
+                                    access_val = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
+                                except Exception:
+                                    access_val = None
+                                if isinstance(access_val, str) and 'read' in access_val.lower() and 'write' not in access_val.lower():
+                                    node.set_writable(False)
+                                else:
+                                    node.set_writable(True)
 
                             self._nodes[tag_id] = {"node": node, "type": dtype}
                     # groups inside device
@@ -357,7 +418,14 @@ class OPCServer:
                                     node = grp_node.add_variable(self._nsidx, tag_name, init_val)
                                 else:
                                     node = grp_node.add_variable(self._nsidx, tag_name, 0)
-                                node.set_writable(True)
+                                try:
+                                    access_val2 = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
+                                except Exception:
+                                    access_val2 = None
+                                if isinstance(access_val2, str) and 'read' in access_val2.lower() and 'write' not in access_val2.lower():
+                                    node.set_writable(False)
+                                else:
+                                    node.set_writable(True)
                                 try:
                                     if 'float' in str(dtype).lower():
                                         node.set_data_type(ua.NodeId(ua.ObjectIds.Float))

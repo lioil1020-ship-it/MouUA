@@ -6,8 +6,8 @@
       "text": "Channel3",
       "driver": "Modbus RTU Serial",
       "params": {
-        "baud": "115200",
-        "com": "COM2",
+        "baud": "57600",
+        "com": "COM7",
         "data_bits": "8",
         "flow": "None",
         "parity": "None",
@@ -22,7 +22,7 @@
           "description": "DCB-106",
           "timing": {
             "attempts": "1",
-            "inter_req_delay": "3000",
+            "inter_req_delay": "1000",
             "req_timeout": "2000"
           },
           "data_access": {
@@ -45,7 +45,11 @@
             "int_regs": 120,
             "out_coils": 2000
           },
-          "ethernet": {},
+          "ethernet": {
+            "ip": "192.168.2.33",
+            "port": "502",
+            "protocol": "TCP/IP"
+          },
           "children": [
             {
               "type": "Tag",
