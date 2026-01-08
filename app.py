@@ -1,4 +1,5 @@
 import sys
+import os
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -231,16 +232,24 @@ class IoTApp(QMainWindow):
         self.clipboard_manager = ClipboardManager(self)
         self.controller = AppController(self)
         self.current_project_path = None
+        # dirty flag: True when there are unsaved changes
+        self._dirty = False
         # tx id counter for MBAP ADU generation in UI-synthesized diagnostics
         self._txid = 0
         # diagnostics display flags (can be toggled from TerminalWindow menu)
         self._diag_show_only_txrx = True
         self._diag_show_raw = False
 
-        # 檔案路徑，用於儲存上次打開/儲存的專案路徑
+        # 檔案路徑：使用 %APPDATA%/ModUA 存放 temp.json 與 last project path
         try:
-            self._last_project_file = os.path.join(os.path.expanduser("~"), ".modua_last_project")
+            appdata_root = os.getenv('APPDATA') or os.path.join(os.path.expanduser('~'), '.modua')
+            self._appdata_dir = os.path.join(appdata_root, 'ModUA')
+            os.makedirs(self._appdata_dir, exist_ok=True)
+            self._temp_json = os.path.join(self._appdata_dir, 'temp.json')
+            self._last_project_file = os.path.join(self._appdata_dir, 'last_project.txt')
         except Exception:
+            self._appdata_dir = None
+            self._temp_json = None
             self._last_project_file = None
         
         # 創建獨立的 Terminal 窗口（診斷視窗）
@@ -449,7 +458,22 @@ class IoTApp(QMainWindow):
         self.tree.setCurrentItem(self.tree.conn_node)
         # 嘗試載入上次儲存的專案（若存在）
         try:
-            if self._last_project_file and os.path.exists(self._last_project_file):
+            # 如果 temp.json 存在，優先載入 temp（恢復上次的暫存狀態）
+            loaded = False
+            if self._temp_json and os.path.exists(self._temp_json):
+                try:
+                    self.controller.import_project_from_json(self._temp_json)
+                    self.current_project_path = None
+                    loaded = True
+                    try:
+                        self.tree.expandAll()
+                    except Exception:
+                        pass
+                except Exception:
+                    loaded = False
+
+            # 若沒有 temp，嘗試載入上次開啟的專案路徑（若存在）
+            if not loaded and self._last_project_file and os.path.exists(self._last_project_file):
                 try:
                     with open(self._last_project_file, "r", encoding="utf-8") as _f:
                         last_path = _f.read().strip()
@@ -464,7 +488,6 @@ class IoTApp(QMainWindow):
                         except Exception:
                             pass
                     except Exception:
-                        # 無法載入上次專案，退回到空的 Connectivity 節點
                         pass
                 else:
                     try:
@@ -484,6 +507,69 @@ class IoTApp(QMainWindow):
 
         # 更新右側表格（以目前 tree 狀態為準）
         self.update_right_table(self.tree.conn_node, 0)
+        try:
+            # ensure monitor & opcua reflect loaded project immediately
+            if hasattr(self, '_on_project_structure_changed'):
+                try:
+                    self._on_project_structure_changed()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # On startup, if monitor empty, populate it from the tree
+        try:
+            if getattr(self, 'monitor_table', None) is not None and self.monitor_table.rowCount() == 0:
+                try:
+                    self.add_all_tags_to_monitor()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Diagnostic: report whether opcua settings were loaded and whether OPCServer class is available
+        try:
+            try:
+                s = getattr(self, 'opcua_settings', None)
+                ok = OPCServer is not None
+                # summarize settings (avoid dumping sensitive data)
+                summary = None
+                try:
+                    if s is None:
+                        summary = 'None'
+                    elif isinstance(s, dict):
+                        summary = f'dict(keys={list(s.keys())})'
+                    else:
+                        summary = str(type(s))
+                except Exception:
+                    summary = 'unrepresentable'
+                try:
+                    self.append_diagnostic(f'Startup: opcua_settings={summary}; OPCServerAvailable={ok}')
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # 若載入時帶有 opcua_settings，統一以 `apply_opcua_settings()` 處理
+        #（該函式會停止舊伺服器、建立並啟動新伺服器，然後建立節點）
+        try:
+            if getattr(self, 'opcua_settings', None):
+                try:
+                    self.append_diagnostic('Startup: applying opcua_settings via apply_opcua_settings()')
+                except Exception:
+                    pass
+                try:
+                    # use the centralised helper to ensure identical behaviour
+                    # to when the user presses OK in the OPC UA settings dialog
+                    self.apply_opcua_settings(self.opcua_settings)
+                except Exception as e:
+                    try:
+                        import traceback
+                        self.append_diagnostic(f'Startup: apply_opcua_settings failed: {e}\n{traceback.format_exc()}')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     
     def show_terminal_window(self):
         """彈出 Terminal 窗口"""
@@ -710,6 +796,146 @@ class IoTApp(QMainWindow):
                         it5 = QTableWidgetItem(child.data(3, Qt.ItemDataRole.UserRole) or "")
                         it5.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                         self.tag_table.setItem(row, 5, it5)
+
+    def _mark_dirty(self, v: bool = True):
+        try:
+            self._dirty = bool(v)
+            base = "Modbus to OPC UA"
+            try:
+                if self._dirty:
+                    self.setWindowTitle(base + " *")
+                else:
+                    self.setWindowTitle(base)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_project_structure_changed(self):
+        """Called when channels/devices/tags structure changed.
+        Keep monitor view and OPC UA nodes in sync with the tree.
+        """
+        try:
+            # refresh right table for current selection
+            try:
+                cur = getattr(self, 'tree', None).currentItem() if getattr(self, 'tree', None) else None
+                if cur is None:
+                    cur = getattr(self, 'tree', None).conn_node if getattr(self, 'tree', None) else None
+                if cur is not None:
+                    try:
+                        self.update_right_table(cur, 0)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Rebuild monitor entries if runtime is running or monitor already has items
+            try:
+                running = any(getattr(p, '_running', False) for p in getattr(self, 'pollers', []))
+            except Exception:
+                running = False
+            try:
+                has_monitor_items = getattr(self, 'monitor_table', None) is not None and self.monitor_table.rowCount() > 0
+            except Exception:
+                has_monitor_items = False
+
+            if running or has_monitor_items:
+                # if running, stop polling briefly to avoid races
+                was_running = running
+                try:
+                    if was_running:
+                        self.stop_polling()
+                except Exception:
+                    pass
+
+                try:
+                    # clear existing monitor state
+                    if getattr(self, 'monitor_table', None) is not None:
+                        self.monitor_table.setRowCount(0)
+                    self.monitor_row.clear()
+                    self.monitor_counts.clear()
+                    self.monitor_last_values.clear()
+                    self.monitored_tags.clear()
+                except Exception:
+                    pass
+
+                try:
+                    # re-add all tags to monitor
+                    self.add_all_tags_to_monitor()
+                except Exception:
+                    pass
+
+                try:
+                    if was_running:
+                        self.start_polling()
+                except Exception:
+                    pass
+
+            # Update OPC UA nodes if server exists
+            try:
+                if getattr(self, 'opc_server', None) is not None:
+                    root = getattr(self.tree, 'conn_node', None)
+                    if root is not None:
+                        try:
+                            self.opc_server.setup_tags_from_tree(root)
+                        except Exception as e:
+                            try:
+                                import traceback
+                                self.append_diagnostic(f'OPC UA: setup_tags_from_tree failed on project-structure-change: {e}\n{traceback.format_exc()}')
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        """Handle app close: save temp.json and prompt on unsaved changes."""
+        try:
+            # if dirty, ask user to save or cancel
+            if getattr(self, '_dirty', False):
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Icon.Warning)
+                msg.setWindowTitle("有未儲存的變更")
+                msg.setText("您有未儲存的變更。要現在儲存嗎？")
+                save_btn = msg.addButton("儲存", QMessageBox.ButtonRole.AcceptRole)
+                cancel_btn = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                msg.exec()
+                btn = msg.clickedButton()
+                if btn == save_btn:
+                    # try to save; if no current path, perform Save As
+                    if not self.current_project_path:
+                        self.save_project_as()
+                    else:
+                        self.save_project()
+                    # if still dirty, user likely cancelled save-as dialog -> abort close
+                    if getattr(self, '_dirty', False):
+                        event.ignore()
+                        return
+                else:
+                    # cancel -> abort close
+                    event.ignore()
+                    return
+
+            # always write temp.json as snapshot before exit
+            try:
+                if getattr(self, '_temp_json', None):
+                    self.controller.export_project_to_json(self._temp_json)
+            except Exception:
+                pass
+
+            # stop runtime and pollers cleanly
+            try:
+                self.stop_runtime()
+            except Exception:
+                pass
+
+            event.accept()
+        except Exception:
+            try:
+                event.accept()
+            except Exception:
+                pass
             else:
                 # Group: show only direct Tag children (do not include tags from nested groups)
                 for i in range(item.childCount()):
@@ -940,6 +1166,23 @@ class IoTApp(QMainWindow):
             parent = item.parent() or self.tree.invisibleRootItem()
             parent.removeChild(item)
             self.update_right_table(parent, 0)
+            try:
+                if hasattr(self, '_on_project_structure_changed'):
+                    try:
+                        self._on_project_structure_changed()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # ensure monitor is populated after opening (if currently empty)
+            try:
+                if getattr(self, 'monitor_table', None) is not None and self.monitor_table.rowCount() == 0:
+                    try:
+                        self.add_all_tags_to_monitor()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def on_copy_item(self, item):
         self.clipboard_manager.copy(item)
@@ -948,12 +1191,28 @@ class IoTApp(QMainWindow):
         parent = self.clipboard_manager.cut(item)
         if parent:
             self.update_right_table(parent, 0)
+            try:
+                if hasattr(self, '_on_project_structure_changed'):
+                    try:
+                        self._on_project_structure_changed()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def on_paste_item(self, target_item):
         # 現在由 ClipboardManager 處理貼上，並回傳被影響的父節點
         parent = self.clipboard_manager.paste(target_item)
         if parent:
             self.update_right_table(parent, 0)
+            try:
+                if hasattr(self, '_on_project_structure_changed'):
+                    try:
+                        self._on_project_structure_changed()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def on_import_device_csv(self, device_item):
         import os
@@ -996,7 +1255,25 @@ class IoTApp(QMainWindow):
                     pass
         except Exception:
             pass
+        # clearing project should clear dirty state and remove temp
+        try:
+            self._mark_dirty(False)
+            if getattr(self, '_temp_json', None) and os.path.exists(self._temp_json):
+                try:
+                    os.remove(self._temp_json)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self.update_right_table(self.tree.conn_node, 0)
+        try:
+            if hasattr(self, '_on_project_structure_changed'):
+                try:
+                    self._on_project_structure_changed()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def open_project(self):
         import os
@@ -1004,24 +1281,59 @@ class IoTApp(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Open Project", desktop_path, "JSON Files (*.json)")
         if not path:
             return
+
+        # Load project file and update UI; keep logic simple and explicit
         try:
             self.controller.import_project_from_json(path)
-            self.current_project_path = path
-            # 展開左側樹狀以便預設顯示所有分支
-            try:
-                self.tree.expandAll()
-            except Exception:
-                pass
-            # 儲存為上次開啟專案
-            try:
-                if getattr(self, "_last_project_file", None):
-                    with open(self._last_project_file, "w", encoding="utf-8") as _f:
-                        _f.write(path)
-            except Exception:
-                pass
+        except Exception as e:
+            QMessageBox.warning(self, "Open Failed", f"Failed to open project: {path}\n{e}")
+            return
+
+        self.current_project_path = path
+        try:
+            self.tree.expandAll()
+        except Exception:
+            pass
+
+        # If opcua settings present, apply them (simulate pressing OK on settings)
+        try:
+            if getattr(self, 'opcua_settings', None):
+                try:
+                    self.apply_opcua_settings(self.opcua_settings)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # save last project path
+        try:
+            if getattr(self, "_last_project_file", None):
+                with open(self._last_project_file, "w", encoding="utf-8") as _f:
+                    _f.write(path)
+        except Exception:
+            pass
+
+        # loaded project -> not dirty and remove temp
+        try:
+            self._mark_dirty(False)
+            if getattr(self, '_temp_json', None) and os.path.exists(self._temp_json):
+                try:
+                    os.remove(self._temp_json)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # refresh UI and other subscribers
+        try:
             self.update_right_table(self.tree.conn_node, 0)
         except Exception:
-            QMessageBox.warning(self, "Open Failed", f"Failed to open project: {path}")
+            pass
+        try:
+            if hasattr(self, '_on_project_structure_changed'):
+                self._on_project_structure_changed()
+        except Exception:
+            pass
 
     def save_project(self):
         if not self.current_project_path:
@@ -1033,6 +1345,34 @@ class IoTApp(QMainWindow):
                 if getattr(self, "_last_project_file", None):
                     with open(self._last_project_file, "w", encoding="utf-8") as _f:
                         _f.write(self.current_project_path)
+            except Exception:
+                pass
+            # saved -> clear dirty and remove temp
+            try:
+                self._mark_dirty(False)
+                if getattr(self, '_temp_json', None) and os.path.exists(self._temp_json):
+                    try:
+                        os.remove(self._temp_json)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # ensure monitor/OPC reflect saved project
+            try:
+                if hasattr(self, '_on_project_structure_changed'):
+                    try:
+                        self._on_project_structure_changed()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # ensure monitor is populated after save (if currently empty)
+            try:
+                if getattr(self, 'monitor_table', None) is not None and self.monitor_table.rowCount() == 0:
+                    try:
+                        self.add_all_tags_to_monitor()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         except Exception:
@@ -1054,6 +1394,34 @@ class IoTApp(QMainWindow):
                 if getattr(self, "_last_project_file", None):
                     with open(self._last_project_file, "w", encoding="utf-8") as _f:
                         _f.write(path)
+            except Exception:
+                pass
+            # saved -> clear dirty and remove temp
+            try:
+                self._mark_dirty(False)
+                if getattr(self, '_temp_json', None) and os.path.exists(self._temp_json):
+                    try:
+                        os.remove(self._temp_json)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # ensure monitor/OPC reflect saved project
+            try:
+                if hasattr(self, '_on_project_structure_changed'):
+                    try:
+                        self._on_project_structure_changed()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            # ensure monitor is populated after save-as (if currently empty)
+            try:
+                if getattr(self, 'monitor_table', None) is not None and self.monitor_table.rowCount() == 0:
+                    try:
+                        self.add_all_tags_to_monitor()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         except Exception:
@@ -1335,11 +1703,15 @@ class IoTApp(QMainWindow):
                 # When set to only show TX/RX, apply whitelist; otherwise show all
                 if show_only_txrx:
                     ok = False
+                    # always allow TX/RX and Modbus/Write related traces
                     if "TX:" in txt or "RX:" in txt:
                         ok = True
                     if txt.strip().startswith("Using "):
                         ok = True
                     if "[WRITE" in txt or "WRITE_CALL" in txt:
+                        ok = True
+                    # also allow explicit startup/opcua diagnostics so users can see server status
+                    if txt.strip().startswith("Startup:") or txt.strip().startswith("OPC UA:"):
                         ok = True
                     if not ok:
                         return
@@ -1442,41 +1814,66 @@ class IoTApp(QMainWindow):
                                 except Exception:
                                     pass
                                 self.opc_server = None
-
-                            # create nodes from tree if available
-                            try:
-                                if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
-                                    root = getattr(self.tree, 'conn_node', None)
-                                    if root:
-                                        try:
-                                            self.opc_server.setup_tags_from_tree(root)
-                                        except Exception:
-                                            pass
-                            except Exception:
-                                pass
-
-                            # start periodic push timer if broker exists and timer not running
-                            try:
-                                if getattr(self, 'opc_server', None) and getattr(self, 'data_broker', None):
-                                    if getattr(self, '_opc_update_timer', None) is None:
-                                        self._opc_update_timer = QTimer(self)
-                                        self._opc_update_timer.setInterval(200)
-                                        def _push_runtime():
-                                            try:
-                                                snap = self.data_broker.snapshot()
-                                                for k, v in snap.items():
-                                                    try:
-                                                        self.opc_server.update_tag(k, v.get('value'))
-                                                    except Exception:
-                                                        pass
-                                            except Exception:
-                                                pass
-                                        self._opc_update_timer.timeout.connect(_push_runtime)
-                                        self._opc_update_timer.start()
-                            except Exception:
-                                pass
                     except Exception:
                         pass
+            else:
+                # opc_server exists (possibly prepared but not started) -> start if not running
+                try:
+                    if not getattr(self.opc_server, '_is_running', False):
+                        try:
+                            self.opc_server.start()
+                            try:
+                                self.append_diagnostic('OPC UA: Running (started from Runtime)')
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            try:
+                                self.append_diagnostic(f'OPC UA failed to start from Runtime: {e}')
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+            # create nodes from tree if available
+            try:
+                if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
+                    root = getattr(self.tree, 'conn_node', None)
+                    if root:
+                        try:
+                            self.opc_server.setup_tags_from_tree(root)
+                            try:
+                                self.append_diagnostic('OPC UA: setup_tags_from_tree completed on Runtime start')
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            try:
+                                import traceback
+                                self.append_diagnostic(f'OPC UA: setup_tags_from_tree failed on Runtime start: {e}\n{traceback.format_exc()}')
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+
+            # start periodic push timer if broker exists and timer not running
+            try:
+                if getattr(self, 'opc_server', None) and getattr(self, 'data_broker', None):
+                    if getattr(self, '_opc_update_timer', None) is None:
+                        self._opc_update_timer = QTimer(self)
+                        self._opc_update_timer.setInterval(200)
+                        def _push_runtime():
+                            try:
+                                snap = self.data_broker.snapshot()
+                                for k, v in snap.items():
+                                    try:
+                                        self.opc_server.update_tag(k, v.get('value'))
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        self._opc_update_timer.timeout.connect(_push_runtime)
+                        self._opc_update_timer.start()
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1520,51 +1917,15 @@ class IoTApp(QMainWindow):
                 return
 
             vals = dlg.values()
-            # store settings on the main window for later use
+            # store settings and apply them (same behaviour as pressing OK)
             self.opcua_settings = vals
             try:
                 self.append_diagnostic(f"OPC UA settings saved: {vals}")
             except Exception:
                 pass
 
-            # stop existing server if any
-            if getattr(self, 'opc_server', None):
-                try:
-                    self.opc_server.stop()
-                except Exception:
-                    pass
-                self.opc_server = None
-
-            # start server
-            if OPCServer is None:
-                try:
-                    self.append_diagnostic("OPC UA library not available; cannot start server")
-                except Exception:
-                    pass
-                return
-
-            self.opc_server = OPCServer(vals)
-            try:
-                self.opc_server.start()
-                try:
-                    self.append_diagnostic("OPC UA: Running")
-                except Exception:
-                    pass
-            except Exception as e:
-                try:
-                    self.append_diagnostic(f"OPC UA failed to start: {e}")
-                except Exception:
-                    pass
-                self.opc_server = None
-
-            # If server started, create nodes from tree
-            try:
-                if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
-                    root = getattr(self.tree, 'conn_node', None)
-                    if root:
-                        self.opc_server.setup_tags_from_tree(root)
-            except Exception:
-                pass
+            # apply settings (stop old, create/start new, setup nodes)
+            self.apply_opcua_settings(vals)
 
             # create periodic timer to push broker snapshot to OPC server
             try:
@@ -1593,6 +1954,67 @@ class IoTApp(QMainWindow):
                 self.append_diagnostic(f"Failed to open OPC UA settings: {e}")
             except Exception:
                 pass
+
+    def apply_opcua_settings(self, vals: dict):
+        """Apply OPC UA settings as if the user pressed OK in the settings dialog.
+        Stop any existing server, create/start a new one, and populate nodes from the tree.
+        """
+        try:
+            self.opcua_settings = vals
+        except Exception:
+            pass
+
+        # stop existing server
+        if getattr(self, 'opc_server', None):
+            try:
+                self.opc_server.stop()
+            except Exception:
+                pass
+            self.opc_server = None
+
+        if OPCServer is None:
+            try:
+                self.append_diagnostic('OPC UA library not available; cannot start server')
+            except Exception:
+                pass
+            return
+
+        try:
+            self.opc_server = OPCServer(vals)
+            try:
+                self.opc_server.start()
+                try:
+                    self.append_diagnostic('OPC UA: Running')
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    self.append_diagnostic(f'OPC UA failed to start: {e}')
+                except Exception:
+                    pass
+                self.opc_server = None
+        except Exception:
+            self.opc_server = None
+
+        # create nodes from tree
+        try:
+            if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
+                root = getattr(self.tree, 'conn_node', None)
+                if root:
+                    try:
+                        self.opc_server.setup_tags_from_tree(root)
+                        try:
+                            self.append_diagnostic('OPC UA: setup_tags_from_tree completed after OPC UA settings applied')
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        try:
+                            import traceback
+                            self.append_diagnostic(f'OPC UA: setup_tags_from_tree failed after OPC UA settings applied: {e}\n{traceback.format_exc()}')
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
     def add_all_tags_to_monitor(self):
         """添加所有 tag 到 monitor 視窗"""
