@@ -2588,6 +2588,20 @@ class IoTApp(QMainWindow):
                 if row is None and canonical_key is not None:
                     row = self.monitor_row.get((canonical_key, idx))
                 if row is None:
+                    # diagnostic: record missing monitor row for this tag/index
+                    try:
+                        self.append_diagnostic(f"MONITOR_MISS: id={tid} idx={idx} canonical={canonical_key}")
+                    except Exception:
+                        pass
+                    try:
+                        from datetime import datetime as _dt
+                        t = _dt.now()
+                        ms = int(t.microsecond / 1000)
+                        ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
+                        with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
+                            _f.write(f"{ts}\tMONITOR_MISS: id={tid} idx={idx} canonical={canonical_key}\n")
+                    except Exception:
+                        pass
                     continue
                 
                 # 更新值
@@ -2625,6 +2639,20 @@ class IoTApp(QMainWindow):
             if row is None and canonical_key is not None:
                 row = self.monitor_row.get(canonical_key)
             if row is None:
+                # diagnostic: missing scalar monitor row
+                try:
+                    self.append_diagnostic(f"MONITOR_MISS: id={tid} canonical={canonical_key}")
+                except Exception:
+                    pass
+                try:
+                    from datetime import datetime as _dt
+                    t = _dt.now()
+                    ms = int(t.microsecond / 1000)
+                    ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
+                    with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
+                        _f.write(f"{ts}\tMONITOR_MISS: id={tid} canonical={canonical_key}\n")
+                except Exception:
+                    pass
                 return
             
             # 更新值
