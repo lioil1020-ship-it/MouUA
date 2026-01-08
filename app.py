@@ -1787,98 +1787,11 @@ class IoTApp(QMainWindow):
                 pass
         except Exception:
             pass
-        # 先添加所有 tag 到 monitor
-        self.add_all_tags_to_monitor()
-        # 然後啟動輪詢
-        self.start_polling()
-        # 同步嘗試啟動 OPC UA Server（如果有設定且尚未啟動），以方便使用者用 Runtime 一鍵啟動
+
+        # Runtime should not create/delete monitor items or OPC UA nodes.
+        # Only control the pollers (start polling); monitor/OPC management is done elsewhere.
         try:
-            # only attempt if server not running and settings present
-            if getattr(self, 'opc_server', None) is None:
-                vals = getattr(self, 'opcua_settings', None)
-                if vals:
-                    try:
-                        if OPCServer is None:
-                            self.append_diagnostic('OPC UA library not available; cannot start server')
-                        else:
-                            self.opc_server = OPCServer(vals)
-                            try:
-                                self.opc_server.start()
-                                try:
-                                    self.append_diagnostic('OPC UA: Running (started from Runtime)')
-                                except Exception:
-                                    pass
-                            except Exception as e:
-                                try:
-                                    self.append_diagnostic(f'OPC UA failed to start from Runtime: {e}')
-                                except Exception:
-                                    pass
-                                self.opc_server = None
-                    except Exception:
-                        pass
-            else:
-                # opc_server exists (possibly prepared but not started) -> start if not running
-                try:
-                    if not getattr(self.opc_server, '_is_running', False):
-                        try:
-                            self.opc_server.start()
-                            try:
-                                self.append_diagnostic('OPC UA: Running (started from Runtime)')
-                            except Exception:
-                                pass
-                        except Exception as e:
-                            try:
-                                self.append_diagnostic(f'OPC UA failed to start from Runtime: {e}')
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-
-            # create nodes from tree if available — but avoid duplicating nodes on repeated start/stop
-            try:
-                if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
-                    root = getattr(self.tree, 'conn_node', None)
-                    if root:
-                        try:
-                            if not getattr(self.opc_server, '_nodes_populated', False):
-                                self.opc_server.setup_tags_from_tree(root)
-                                try:
-                                    self.opc_server._nodes_populated = True
-                                except Exception:
-                                    pass
-                                try:
-                                    self.append_diagnostic('OPC UA: setup_tags_from_tree completed on Runtime start')
-                                except Exception:
-                                    pass
-                        except Exception as e:
-                            try:
-                                import traceback
-                                self.append_diagnostic(f'OPC UA: setup_tags_from_tree failed on Runtime start: {e}\n{traceback.format_exc()}')
-                            except Exception:
-                                pass
-            except Exception:
-                pass
-
-            # start periodic push timer if broker exists and timer not running
-            try:
-                if getattr(self, 'opc_server', None) and getattr(self, 'data_broker', None):
-                    if getattr(self, '_opc_update_timer', None) is None:
-                        self._opc_update_timer = QTimer(self)
-                        self._opc_update_timer.setInterval(200)
-                        def _push_runtime():
-                            try:
-                                snap = self.data_broker.snapshot()
-                                for k, v in snap.items():
-                                    try:
-                                        self.opc_server.update_tag(k, v.get('value'))
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-                        self._opc_update_timer.timeout.connect(_push_runtime)
-                        self._opc_update_timer.start()
-            except Exception:
-                pass
+            self.start_polling()
         except Exception:
             pass
 
