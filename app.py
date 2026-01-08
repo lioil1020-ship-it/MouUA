@@ -1834,17 +1834,22 @@ class IoTApp(QMainWindow):
                 except Exception:
                     pass
 
-            # create nodes from tree if available
+            # create nodes from tree if available — but avoid duplicating nodes on repeated start/stop
             try:
                 if getattr(self, 'opc_server', None) and getattr(self, 'tree', None):
                     root = getattr(self.tree, 'conn_node', None)
                     if root:
                         try:
-                            self.opc_server.setup_tags_from_tree(root)
-                            try:
-                                self.append_diagnostic('OPC UA: setup_tags_from_tree completed on Runtime start')
-                            except Exception:
-                                pass
+                            if not getattr(self.opc_server, '_nodes_populated', False):
+                                self.opc_server.setup_tags_from_tree(root)
+                                try:
+                                    self.opc_server._nodes_populated = True
+                                except Exception:
+                                    pass
+                                try:
+                                    self.append_diagnostic('OPC UA: setup_tags_from_tree completed on Runtime start')
+                                except Exception:
+                                    pass
                         except Exception as e:
                             try:
                                 import traceback
@@ -1999,6 +2004,11 @@ class IoTApp(QMainWindow):
                     try:
                         self.opc_server.setup_tags_from_tree(root)
                         try:
+                            # mark that nodes have been populated to avoid duplicate creations later
+                            try:
+                                self.opc_server._nodes_populated = True
+                            except Exception:
+                                pass
                             self.append_diagnostic('OPC UA: setup_tags_from_tree completed after OPC UA settings applied')
                         except Exception:
                             pass
