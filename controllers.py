@@ -930,6 +930,17 @@ class AppController:
         except Exception:
             pass
 
+        # Imported project should not be considered a user modification.
+        # Ensure the app's dirty flag is cleared after import.
+        try:
+            if hasattr(self.app, '_mark_dirty'):
+                try:
+                    self.app._mark_dirty(False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def read_tag_value(self, tag_item, host: str = None, port: int = 502, unit: int = 1, timeout: float = 3.0, connect_timeout: float | None = None, client_mode: str = "tcp", client_params: dict | None = None, diag_callback=None):
         """Read a single tag value via Modbus (synchronous wrapper).
 

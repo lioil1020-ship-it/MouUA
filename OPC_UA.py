@@ -232,6 +232,23 @@ class OPCServer:
         """
         if not self._server:
             raise RuntimeError("Server not started")
+        # remove any previously created nodes/children to avoid duplicates
+        try:
+            try:
+                children = self._objects.get_children()
+                for c in children:
+                    try:
+                        c.delete()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            try:
+                self._nodes.clear()
+            except Exception:
+                self._nodes = {}
+        except Exception:
+            pass
         for dev in devices_config:
             dev_name = dev.get('name') or 'Device'
             dev_node = self._objects.add_object(self._nsidx, dev_name)
@@ -273,6 +290,25 @@ class OPCServer:
         if not self._server:
             raise RuntimeError("Server not started")
         try:
+            # clear previously-created nodes/objects to avoid accumulating duplicates
+            try:
+                # remove child objects under Objects node if possible
+                try:
+                    children = self._objects.get_children()
+                    for c in children:
+                        try:
+                            c.delete()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # clear internal mapping
+                try:
+                    self._nodes.clear()
+                except Exception:
+                    self._nodes = {}
+            except Exception:
+                pass
             # iterate channels under root
             for ch_idx in range(conn_root_item.childCount()):
                 ch = conn_root_item.child(ch_idx)
@@ -325,49 +361,51 @@ class OPCServer:
                                 dtype = None
                             dtype = dtype or 'Int'
 
-                            # if array_len present, create an array initial value
-                            try:
-                                if array_len and int(array_len) > 0:
-                                    # create list of zeros with appropriate type
-                                    base = dtype or 'Int'
-                                    dt = str(base).lower()
-                                    if 'float' in dt or 'double' in dt:
-                                        init_val = [0.0] * int(array_len)
+                            # If we've previously created this tag, reuse the node instead of creating a new one.
+                            if tag_id in self._nodes:
+                                node = self._nodes[tag_id].get('node')
+                                # update stored type
+                                self._nodes[tag_id]['type'] = dtype
+                            else:
+                                # if array_len present, create an array initial value
+                                try:
+                                    if array_len and int(array_len) > 0:
+                                        # create list of zeros with appropriate type
+                                        base = dtype or 'Int'
+                                        dt = str(base).lower()
+                                        if 'float' in dt or 'double' in dt:
+                                            init_val = [0.0] * int(array_len)
+                                        else:
+                                            init_val = [0] * int(array_len)
+                                        node = dev_node.add_variable(self._nsidx, tag_name, init_val)
                                     else:
-                                        init_val = [0] * int(array_len)
-                                    node = dev_node.add_variable(self._nsidx, tag_name, init_val)
-                                else:
+                                        node = dev_node.add_variable(self._nsidx, tag_name, 0)
+                                except Exception:
                                     node = dev_node.add_variable(self._nsidx, tag_name, 0)
-                                # set writable based on Tag's client access (slot 9) if available
-                                try:
-                                    access_val = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
-                                except Exception:
-                                    access_val = None
-                                if isinstance(access_val, str) and 'read' in access_val.lower() and 'write' not in access_val.lower():
-                                    node.set_writable(False)
-                                else:
-                                    node.set_writable(True)
-                                try:
-                                    if 'float' in str(dtype).lower():
-                                        node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
-                                    elif 'double' in str(dtype).lower():
-                                        node.set_data_type(ua.NodeId(ua.ObjectIds.Double))
-                                    else:
-                                        node.set_data_type(ua.NodeId(ua.ObjectIds.Int16))
-                                except Exception:
-                                    pass
-                            except Exception:
-                                node = dev_node.add_variable(self._nsidx, tag_name, 0)
-                                try:
-                                    access_val = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
-                                except Exception:
-                                    access_val = None
-                                if isinstance(access_val, str) and 'read' in access_val.lower() and 'write' not in access_val.lower():
-                                    node.set_writable(False)
-                                else:
-                                    node.set_writable(True)
+                                self._nodes[tag_id] = {"node": node, "type": dtype}
 
-                            self._nodes[tag_id] = {"node": node, "type": dtype}
+                            # set writable based on Tag's client access (slot 9) if available
+                            try:
+                                access_val = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
+                            except Exception:
+                                access_val = None
+                            try:
+                                if isinstance(access_val, str) and 'read' in access_val.lower() and 'write' not in access_val.lower():
+                                    node.set_writable(False)
+                                else:
+                                    node.set_writable(True)
+                            except Exception:
+                                pass
+
+                            try:
+                                if 'float' in str(dtype).lower():
+                                    node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
+                                elif 'double' in str(dtype).lower():
+                                    node.set_data_type(ua.NodeId(ua.ObjectIds.Double))
+                                else:
+                                    node.set_data_type(ua.NodeId(ua.ObjectIds.Int16))
+                            except Exception:
+                                pass
                     # groups inside device
                     for g in range(dev.childCount()):
                         grp = dev.child(g)
@@ -410,22 +448,33 @@ class OPCServer:
                                             array_len = int(m2.group(1))
                                 except Exception:
                                     array_len = None
-                                if array_len and int(array_len) > 0:
-                                    if 'float' in str(dtype).lower() or 'double' in str(dtype).lower():
-                                        init_val = [0.0] * int(array_len)
-                                    else:
-                                        init_val = [0] * int(array_len)
-                                    node = grp_node.add_variable(self._nsidx, tag_name, init_val)
+
+                                # reuse existing node if present
+                                if tag_id in self._nodes:
+                                    node = self._nodes[tag_id].get('node')
+                                    self._nodes[tag_id]['type'] = dtype
                                 else:
-                                    node = grp_node.add_variable(self._nsidx, tag_name, 0)
+                                    if array_len and int(array_len) > 0:
+                                        if 'float' in str(dtype).lower() or 'double' in str(dtype).lower():
+                                            init_val = [0.0] * int(array_len)
+                                        else:
+                                            init_val = [0] * int(array_len)
+                                        node = grp_node.add_variable(self._nsidx, tag_name, init_val)
+                                    else:
+                                        node = grp_node.add_variable(self._nsidx, tag_name, 0)
+                                    self._nodes[tag_id] = {"node": node, "type": dtype}
+
                                 try:
                                     access_val2 = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
                                 except Exception:
                                     access_val2 = None
-                                if isinstance(access_val2, str) and 'read' in access_val2.lower() and 'write' not in access_val2.lower():
-                                    node.set_writable(False)
-                                else:
-                                    node.set_writable(True)
+                                try:
+                                    if isinstance(access_val2, str) and 'read' in access_val2.lower() and 'write' not in access_val2.lower():
+                                        node.set_writable(False)
+                                    else:
+                                        node.set_writable(True)
+                                except Exception:
+                                    pass
                                 try:
                                     if 'float' in str(dtype).lower():
                                         node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
@@ -435,7 +484,6 @@ class OPCServer:
                                         node.set_data_type(ua.NodeId(ua.ObjectIds.Int16))
                                 except Exception:
                                     pass
-                                self._nodes[tag_id] = {"node": node, "type": dtype}
         except Exception:
             pass
 

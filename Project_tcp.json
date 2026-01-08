@@ -67,6 +67,48 @@
                 "type": "None",
                 "units": ""
               }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag1",
+              "address": "400095",
+              "data_type": "Float",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read/Write",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag2",
+              "address": "400096",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read/Write",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
             }
           ]
         }
