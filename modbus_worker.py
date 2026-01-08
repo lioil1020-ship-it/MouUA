@@ -302,6 +302,14 @@ class AsyncPoller(QObject):
 
         # Always emit directly (Qt will queue across threads when needed).
         try:
+            try:
+                # emit a concise diagnostic for every tag emission
+                try:
+                    self.diag_signal.emit(f"EMIT_TAG_POLLED: id={id(tag)} val={repr(value)} qual={quality}")
+                except Exception:
+                    pass
+            except Exception:
+                pass
             _safe_emit(tag, value, ts, quality)
         except Exception as e:
             try:

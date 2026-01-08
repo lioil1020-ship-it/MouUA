@@ -1788,10 +1788,34 @@ class IoTApp(QMainWindow):
         except Exception:
             pass
 
-        # Runtime should not create/delete monitor items or OPC UA nodes.
-        # Only control the pollers (start polling); monitor/OPC management is done elsewhere.
+        # Ensure monitor is populated before starting pollers and log startup.
         try:
-            self.start_polling()
+            try:
+                from datetime import datetime as _dt
+                t = _dt.now()
+                ms = int(t.microsecond / 1000)
+                ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
+                mon_exists = getattr(self, 'monitor_table', None) is not None
+                rows = self.monitor_table.rowCount() if mon_exists else 'NA'
+                try:
+                    with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
+                        _f.write(f"{ts}\tRUNTIME_START: monitor_exists={mon_exists} rows={rows}\n")
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            if getattr(self, 'monitor_table', None) is not None:
+                try:
+                    self.add_all_tags_to_monitor()
+                except Exception:
+                    pass
+
+            # Only control the pollers (start polling); monitor/OPC management is done elsewhere.
+            try:
+                self.start_polling()
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -2139,8 +2163,32 @@ class IoTApp(QMainWindow):
                 self.monitor_table.setItem(row, 4, q_item)
                 self.monitor_table.setItem(row, 5, uc_item)
                 self.monitor_row[(tid, idx)] = row
+                # also store canonical key mapping for fallback lookups
+                try:
+                    if getattr(self, 'data_broker', None) is not None:
+                        try:
+                            ckey = type(self.data_broker)._make_key_from_tag_item(tag_item)
+                        except Exception:
+                            ckey = None
+                        if ckey is not None:
+                            self.monitor_row[(ckey, idx)] = row
+                except Exception:
+                    pass
                 self.monitor_counts[(tid, idx)] = 0
                 self.monitor_last_values[(tid, idx)] = None
+                try:
+                    self.append_diagnostic(f"MONITOR_ADD: id={tid} row={row} idx={idx} dtype={data_type}")
+                except Exception:
+                    pass
+                try:
+                    from datetime import datetime as _dt
+                    t = _dt.now()
+                    ms = int(t.microsecond / 1000)
+                    ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
+                    with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
+                        _f.write(f"{ts}\tMONITOR_ADD: id={tid} row={row} idx={idx} dtype={data_type}\n")
+                except Exception:
+                    pass
         else:
             # 非数组，正常添加
             row = self.monitor_table.rowCount()
@@ -2171,8 +2219,32 @@ class IoTApp(QMainWindow):
             self.monitor_table.setItem(row, 4, q_item)
             self.monitor_table.setItem(row, 5, uc_item)
             self.monitor_row[tid] = row
+            # also store canonical key mapping for fallback lookups
+            try:
+                if getattr(self, 'data_broker', None) is not None:
+                    try:
+                        ckey = type(self.data_broker)._make_key_from_tag_item(tag_item)
+                    except Exception:
+                        ckey = None
+                    if ckey is not None:
+                        self.monitor_row[ckey] = row
+            except Exception:
+                pass
             self.monitor_counts[tid] = 0
             self.monitor_last_values[tid] = None
+            try:
+                self.append_diagnostic(f"MONITOR_ADD: id={tid} row={row} idx=None dtype={data_type}")
+            except Exception:
+                pass
+            try:
+                from datetime import datetime as _dt
+                t = _dt.now()
+                ms = int(t.microsecond / 1000)
+                ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
+                with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
+                    _f.write(f"{ts}\tMONITOR_ADD: id={tid} row={row} idx=None dtype={data_type}\n")
+            except Exception:
+                pass
         
         if tag_item not in self.monitored_tags:
             self.monitored_tags.append(tag_item)
@@ -2495,12 +2567,26 @@ class IoTApp(QMainWindow):
         data_type = tag_item.data(2, Qt.ItemDataRole.UserRole) or ""
         is_array = "Array" in str(data_type)
         tag_name = tag_item.text(0) if tag_item else "?"
+        # compute canonical key for fallback lookup
+        try:
+            if getattr(self, 'data_broker', None) is not None:
+                try:
+                    canonical_key = type(self.data_broker)._make_key_from_tag_item(tag_item)
+                except Exception:
+                    canonical_key = None
+            else:
+                canonical_key = None
+        except Exception:
+            canonical_key = None
         
         if is_array and isinstance(value, (list, tuple)):
             # 数组类型：为每个元素更新对应的行
             for idx, elem_value in enumerate(value):
                 key = (tid, idx)
                 row = self.monitor_row.get(key)
+                # fallback to canonical_key if id-based lookup fails
+                if row is None and canonical_key is not None:
+                    row = self.monitor_row.get((canonical_key, idx))
                 if row is None:
                     continue
                 
@@ -2535,6 +2621,9 @@ class IoTApp(QMainWindow):
         else:
             # 非数组类型：正常更新
             row = self.monitor_row.get(tid)
+            # fallback to canonical key lookup when necessary
+            if row is None and canonical_key is not None:
+                row = self.monitor_row.get(canonical_key)
             if row is None:
                 return
             
