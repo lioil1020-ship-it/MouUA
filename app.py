@@ -1888,12 +1888,7 @@ class IoTApp(QMainWindow):
         except Exception:
             pass
         self.stop_polling()
-        # 清空监听视窗所有内容
-        self.monitor_table.setRowCount(0)
-        self.monitor_row.clear()
-        self.monitor_counts.clear()
-        self.monitor_last_values.clear()
-        self.monitored_tags.clear()
+        # NOTE: do not clear monitor on stop_runtime — keep monitor contents intact
 
     def toggle_runtime(self):
         """Toggle runtime state: start if stopped, stop if running."""
