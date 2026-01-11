@@ -15,6 +15,7 @@ class ConnectivityTree(QTreeWidget):
     request_cut_item = pyqtSignal(QTreeWidgetItem)
     request_import_csv = pyqtSignal(QTreeWidgetItem)
     request_export_csv = pyqtSignal(QTreeWidgetItem)
+    request_device_diagnostics = pyqtSignal(QTreeWidgetItem)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,6 +87,10 @@ class ConnectivityTree(QTreeWidget):
             menu.addAction("➕ 新增 Tag", lambda: self.request_new_tag.emit(item))
             menu.addSeparator()
             self._add_common_actions(menu, item)
+            # Diagnostics only for Device (show per-device diagnostics window)
+            if node_type == 'Device':
+                menu.addSeparator()
+                menu.addAction("📊 Diagnostics", lambda: self.request_device_diagnostics.emit(item))
             # CSV import/export only on Device nodes
             if node_type == 'Device':
                 menu.addSeparator()

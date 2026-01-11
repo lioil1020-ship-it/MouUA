@@ -18,7 +18,7 @@
           "timing": {
             "attempts": "1",
             "connect_timeout": "3",
-            "inter_req_delay": "1000",
+            "inter_req_delay": "500",
             "req_timeout": "1000"
           },
           "data_access": {
@@ -92,11 +92,53 @@
             {
               "type": "Tag",
               "text": "Tag2",
-              "address": "400096",
+              "address": "300093",
               "data_type": "Word",
               "description": "",
               "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag3",
+              "address": "000103",
+              "data_type": "Boolean",
+              "description": "",
+              "scan_rate": "10",
               "access": "Read/Write",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag4",
+              "address": "100108",
+              "data_type": "Boolean",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
               "scaling": {
                 "clamp_high": "No",
                 "clamp_low": "No",
@@ -131,7 +173,7 @@
           "timing": {
             "attempts": "1",
             "connect_timeout": "3",
-            "inter_req_delay": "1000",
+            "inter_req_delay": "500",
             "req_timeout": "1000"
           },
           "data_access": {
@@ -168,6 +210,48 @@
               "description": "",
               "scan_rate": "10",
               "access": "Read/Write",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag1",
+              "address": "000001",
+              "data_type": "Boolean",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read/Write",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100.0",
+                "scaled_low": "0.0",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag2",
+              "address": "100002",
+              "data_type": "Boolean",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
               "scaling": {
                 "clamp_high": "No",
                 "clamp_low": "No",

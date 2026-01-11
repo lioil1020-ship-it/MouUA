@@ -1,0 +1,4 @@
+﻿Tag Name,Address,Data Type,Respect Data Type,Client Access,Scan Rate,Scaling,Raw Low,Raw High,Scaled Low,Scaled High,Scaled Data Type,Clamp Low,Clamp High,Eng Units,Description,Negate Value
+MF,400095 [25],Float(Array),1,R/W,10,,,,,,,,,,,
+Tag1,400095,Float,1,R/W,10,,,,,,,,,,,
+Tag2,400096,Word,1,R/W,10,,,,,,,,,,,

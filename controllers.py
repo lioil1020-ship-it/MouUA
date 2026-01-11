@@ -951,7 +951,7 @@ class AppController:
 
         return asyncio.run(self.read_tag_value_async(tag_item, host=host, port=port, unit=unit, timeout=timeout, connect_timeout=connect_timeout, client_mode=client_mode, client_params=client_params, diag_callback=diag_callback))
 
-    async def read_tag_value_async(self, tag_item, host: str = None, port: int = 502, unit: int = 1, timeout: float = 3.0, connect_timeout: float | None = None, client_mode: str = "tcp", client_params: dict | None = None, diag_callback=None):
+    async def read_tag_value_async(self, tag_item, host: str = None, port: int = 502, unit: int = 1, timeout: float = 3.0, connect_timeout: float | None = None, client_mode: str = "tcp", client_params: dict | None = None, diag_callback=None, inter_request_delay: float | None = None):
         """Async read for a single tag. Returns the raw pymodbus result.
 
         Emits TX/RX diagnostics via `diag_callback` if provided.
@@ -1060,6 +1060,17 @@ class AppController:
         try:
             if array_len_from_addr is not None:
                 array_len = max(1, int(array_len_from_addr))
+        except Exception:
+            pass
+
+        # If the address explicitly begins with '0' or '1', treat it as a
+        # boolean/coils-style address regardless of the configured dtype.
+        # This enforces Kepware semantics: 0xxxx -> coils (FC1), 1xxxx ->
+        # discrete inputs (FC2) and both are bit/boolean types.
+        try:
+            if str(lead) in ("0", "1"):
+                base_dtype = "Boolean"
+                array_len = max(1, int(array_len))
         except Exception:
             pass
 
@@ -1243,54 +1254,135 @@ class AppController:
             diag_callback=diag_callback,
             **(client_params or {}),
         )
+        # Emit a concise mapping diagnostic so the UI shows how a Kepware
+        # address was translated to a Modbus offset/count/function code.
         try:
-            try:
-                await client.connect_async()
-                last_exc = None
-                result = None
-                for attempt_no in range(1, max(1, attempts) + 1):
-                    try:
-                        if diag_callback:
-                            diag_callback(f"READ ATTEMPT: {attempt_no}/{attempts} unit={unit} offset={offset} count={count} fc={fc}")
-                        result = await client.read_async(offset, count, fc, encoding=encoding)
-                        # treat explicit error responses as failures and potentially retry
-                        is_error = False
-                        try:
-                            is_error = bool(result and getattr(result, 'isError', lambda: False)())
-                        except Exception:
-                            is_error = False
-                        if result is not None and not is_error:
-                            break
-                        else:
-                            last_exc = Exception("Modbus read returned error or no response")
-                    except Exception as e:
-                        last_exc = e
-                    # if more attempts remain, wait inter-request delay
-                    if attempt_no < attempts:
-                        try:
-                            if diag_callback:
-                                diag_callback(f"RETRY WAIT: {inter_delay_sec}s before next attempt")
-                        except Exception:
-                            pass
-                        try:
-                            await asyncio.sleep(inter_delay_sec)
-                        except Exception:
-                            pass
-                # after attempts loop, if result still None or error -> raise
-                if result is None or (hasattr(result, 'isError') and result.isError()):
-                    if last_exc is not None:
-                        raise last_exc
-            except Exception as e:
-                # emit traceback to diagnostics so user can see why read failed
-                if diag_callback:
-                    try:
-                        import traceback
+            if diag_callback:
+                try:
+                    diag_callback(f"MAPPING: addr={addr_raw} -> offset={offset} count={count} fc={fc} per_elem_regs={per_elem_regs} base_dtype={base_dtype} array_len={array_len} zero_based={zero_based} zero_based_bit={zero_based_bit}")
+                except Exception:
+                    pass
 
-                        tb = traceback.format_exc()
-                        diag_callback(f"ERR READ EXCEPTION: {e}\n{tb}")
+            if diag_callback:
+                try:
+                    diag_callback(f"CLIENT_INIT: client_obj={hex(id(client))} mode={client_mode} host={host} port={port}")
+                except Exception:
+                    pass
+
+            await client.connect_async()
+
+            if diag_callback:
+                try:
+                    impl = getattr(client, '_client', None)
+                    impl_id = hex(id(impl)) if impl is not None else 'None'
+                    sock_desc = None
+                    try:
+                        if impl is not None:
+                            for an in ('socket', '_socket', '_sock', 'sock', 'transport', 'serial', '_transport'):
+                                try:
+                                    v = getattr(impl, an, None)
+                                    if v is not None:
+                                        sock_desc = f"{type(v).__name__}@{hex(id(v))}"
+                                        break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        sock_desc = None
+                    try:
+                        trace_flag = bool(getattr(impl, '_trace_installed', False))
+                    except Exception:
+                        trace_flag = False
+                    try:
+                        diag_callback(f"CLIENT_CONNECTED: client_obj={hex(id(client))} impl={impl_id} sock={sock_desc} trace_installed={trace_flag}")
                     except Exception:
                         pass
-                raise
+                except Exception:
+                    pass
+
+            last_exc = None
+            result = None
+            for attempt_no in range(1, max(1, attempts) + 1):
+                try:
+                    if diag_callback:
+                        try:
+                            diag_callback(f"READ ATTEMPT: {attempt_no}/{attempts} unit={unit} offset={offset} count={count} fc={fc}")
+                        except Exception:
+                            pass
+                        try:
+                            impl2 = getattr(client, '_client', None)
+                            impl2_id = hex(id(impl2)) if impl2 is not None else 'None'
+                            diag_callback(f"CLIENT_BEFORE_READ: client_obj={hex(id(client))} impl={impl2_id}")
+                        except Exception:
+                            pass
+
+                    result = await client.read_async(offset, count, fc, encoding=encoding)
+
+                    # emit diagnostic about raw result to help explain retries
+                    try:
+                        if diag_callback:
+                            try:
+                                is_err = False
+                                try:
+                                    is_err = bool(result and getattr(result, 'isError', lambda: False)())
+                                except Exception:
+                                    is_err = False
+                                db_len = 0
+                                try:
+                                    db_len = len(getattr(result, 'data_bytes', b"") or b"")
+                                except Exception:
+                                    db_len = 0
+                                rep = None
+                                try:
+                                    rep = repr(result)
+                                except Exception:
+                                    rep = '<unrepr>'
+                                diag_callback(f"READ_RESULT_DIAG: attempt={attempt_no} is_error={is_err} data_bytes_len={db_len} repr={rep[:200]}")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
+                    # treat explicit error responses as failures and potentially retry
+                    is_error = False
+                    try:
+                        is_error = bool(result and getattr(result, 'isError', lambda: False)())
+                    except Exception:
+                        is_error = False
+                    if result is not None and not is_error:
+                        break
+                    else:
+                        last_exc = Exception("Modbus read returned error or no response")
+                except Exception as e:
+                    last_exc = e
+
+                # if more attempts remain, wait inter-request delay
+                if attempt_no < attempts:
+                    try:
+                        if diag_callback:
+                            diag_callback(f"RETRY WAIT: {inter_delay_sec}s before next attempt")
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.sleep(inter_delay_sec)
+                    except Exception:
+                        pass
+
+            # after attempts loop, if result still None or error -> raise
+            if result is None or (hasattr(result, 'isError') and result.isError()):
+                if last_exc is not None:
+                    raise last_exc
+
+        except Exception as e:
+            # emit traceback to diagnostics so user can see why read failed
+            if diag_callback:
+                try:
+                    import traceback
+
+                    tb = traceback.format_exc()
+                    diag_callback(f"ERR READ EXCEPTION: {e}\n{tb}")
+                except Exception:
+                    pass
+            raise
         finally:
             try:
                 await client.close_async()
@@ -1383,6 +1475,27 @@ class AppController:
                         diag_callback("ERR RX")
                 except Exception:
                     pass
+
+        # enforce inter-request delay AFTER receiving RX before returning
+        try:
+            if inter_request_delay is not None:
+                try:
+                    d = float(inter_request_delay)
+                    if d > 0:
+                        if diag_callback:
+                            try:
+                                diag_callback(f"INTER_DELAY_WAIT: {d}s after RX before next TX")
+                            except Exception:
+                                pass
+                        import asyncio as _asyncio
+                        try:
+                            await _asyncio.sleep(d)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         return result
 
@@ -1509,6 +1622,20 @@ class AppController:
                 per_elem_regs = 1
             fc_read = 3 if lead == "4" else (4 if lead == "3" else 3)
             is_bit_coil = False
+
+        # Enforce read-only for Input Registers (addresses starting with '3').
+        # Kepware: 3xxxx are Input Registers and cannot be written.
+        try:
+            if not is_bit_coil and (str(lead) == '3' or fc_read == 4):
+                if diag_callback:
+                    try:
+                        diag_callback(f"WRITE_DENIED: target {addr_raw} appears to be an Input Register (3xxxx); write not allowed")
+                    except Exception:
+                        pass
+                raise IOError("Write denied: Input Registers (3xxxx) are read-only")
+        except Exception:
+            # re-raise to stop write flow
+            raise
 
         # device encoding flags helper
         def _enc_flag(enc, *keys, default="Enable"):

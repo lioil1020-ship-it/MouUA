@@ -4,6 +4,69 @@ import struct
 import asyncio
 import threading
 import math
+import uuid
+
+# Global bus lock registry to serialize requests per physical/logical connection
+# Keying: ('serial', serial_port) or ('tcp', host, port)
+_BUS_LOCKS: dict = {}
+_BUS_LOCKS_REG_LOCK = threading.Lock()
+
+class _BusLock:
+    def __init__(self, lock: threading.Lock):
+        self._lock = lock
+
+    async def __aenter__(self):
+        # Acquire the threading.Lock in a thread to avoid blocking the event loop
+        await asyncio.to_thread(self._lock.acquire)
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        try:
+            self._lock.release()
+        except Exception:
+            pass
+
+def get_bus_lock(host=None, port=None, client_params=None, client_mode=None):
+    """Return an async context manager for the bus lock for this connection.
+
+    Prefer serial key if client_mode indicates RTU or client_params contains
+    a serial port; otherwise use TCP host:port tuple.
+    """
+    # detect serial identifier
+    serial_id = None
+    try:
+        cm = (client_mode or "").strip().lower() if client_mode is not None else ""
+        if cm in ("rtu", "serial"):
+            # try client_params for explicit port name
+            if isinstance(client_params, dict):
+                serial_id = client_params.get("serial_port") or client_params.get("com") or client_params.get("adapter") or client_params.get("port")
+        if serial_id is None and isinstance(client_params, dict):
+            # some mappings use 'serial_port' or 'com'
+            serial_id = client_params.get("serial_port") or client_params.get("com") or client_params.get("adapter")
+        # normalize numeric COM names
+        if serial_id is not None:
+            try:
+                s = str(serial_id).strip()
+                if s.isdigit():
+                    serial_id = f"COM{int(s)}"
+                else:
+                    serial_id = s
+            except Exception:
+                pass
+    except Exception:
+        serial_id = None
+
+    if serial_id:
+        key = ("serial", serial_id)
+    else:
+        key = ("tcp", str(host), int(port) if port is not None else 0)
+
+    with _BUS_LOCKS_REG_LOCK:
+        lk = _BUS_LOCKS.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _BUS_LOCKS[key] = lk
+    return _BusLock(lk)
 
 def decode_bytes_for_tag(base_dtype, db_slice, arr_len=1, is_bits=False, start_bit=0, bit_order_enable=False, treat_long=False, diag_callback=None):
     """Decode a bytes slice for a tag according to dtype and flags.
@@ -430,33 +493,47 @@ class AsyncPoller(QObject):
                 except Exception:
                     pass
 
+                # Enforce address-prefix semantics: addresses starting with
+                # '0' or '1' are boolean/coils and should use FC1/FC2.
+                try:
+                    if str(lead) in ("0", "1"):
+                        base_dtype = "Boolean"
+                        array_len = max(1, int(array_len))
+                except Exception:
+                    pass
+
                 # determine per-element registers and function code
-                if "Boolean" in base_dtype or base_dtype.lower().startswith("bool"):
-                    per_elem_regs = 1
-                    fc = 1 if lead == "0" else 2
-                else:
-                    dt = base_dtype.lower()
-                    if any(k in dt for k in ("double", "qword", "llong")):
-                        per_elem_regs = 4
-                    elif any(k in dt for k in ("long", "dword", "float")):
-                        per_elem_regs = 2
-                    else:
+                # Determine per-element registers and function code strictly
+                # based on Kepware address prefix semantics:
+                # - 0xxxx -> coils (FC1) boolean
+                # - 1xxxx -> discrete inputs (FC2) boolean
+                # - 3xxxx -> input registers (FC4) read-only
+                # - 4xxxx -> holding registers (FC3)
+                try:
+                    if str(lead) in ("0", "1"):
+                        # Force boolean semantics for coil/discrete
                         per_elem_regs = 1
-                    # Prefer explicit textual check: if original address string
-                    # starts with '3' treat as input registers (FC=4). Otherwise
-                    # use common mapping where '4' -> FC=3 (holding registers).
-                    try:
+                        fc = 1 if str(lead) == "0" else 2
+                        base_dtype = "Boolean"
+                    else:
+                        dt = base_dtype.lower()
+                        if any(k in dt for k in ("double", "qword", "llong")):
+                            per_elem_regs = 4
+                        elif any(k in dt for k in ("long", "dword", "float")):
+                            per_elem_regs = 2
+                        else:
+                            per_elem_regs = 1
+                        # Strict mapping by leading digit
                         if str(addr_no_brackets).strip().startswith("3") or lead == "3":
                             fc = 4
                         elif lead == "4":
                             fc = 3
                         else:
                             fc = 3
-                    except Exception:
-                        if lead == "3":
-                            fc = 4
-                        else:
-                            fc = 3
+                except Exception:
+                    # fallback conservative defaults
+                    per_elem_regs = 1
+                    fc = 3
 
                 # Adjust offset semantics for bit vs register addressing
                 try:
@@ -480,6 +557,15 @@ class AsyncPoller(QObject):
                 try:
                     info = _parse_tag_address_and_dtype(tag)
                     tag_infos.append(info)
+                    # emit mapping diagnostic for each parsed tag
+                    try:
+                        off, cnt, fc, per_regs, base_dtype, array_len, tag_item = info
+                        try:
+                            self._emit_diag(f"TAG_MAPPING: addr={tag.data(1, Qt.ItemDataRole.UserRole)} -> offset={off} count={cnt} fc={fc} per_elem_regs={per_regs} base_dtype={base_dtype} array_len={array_len}")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
                 except Exception:
                     try:
                         self._emit_diag(f"ERR parsing tag addr/dtype {getattr(tag, 'text', lambda x: '?')(0)}")
@@ -526,6 +612,12 @@ class AsyncPoller(QObject):
                 except Exception:
                     pass
 
+            # Emit diagnostic of built group keys so we can see which FC groups exist
+            try:
+                self._emit_diag(f"GROUP_KEYS: {list(groups.keys())}")
+            except Exception:
+                pass
+
 
             # wrapper that delegates to module-level decoder
             def _decode_bytes_for_tag(*args, **kwargs):
@@ -537,6 +629,10 @@ class AsyncPoller(QObject):
             # iterate grouped connections
             for key, items in groups.items():
                 host, port, unit, fc, dev_id = key
+                try:
+                    self._emit_diag(f"PROCESS_GROUP: host={host} port={port} unit={unit} fc={fc} dev_id={dev_id} members={len(items)}")
+                except Exception:
+                    pass
                 # sort by offset
                 items.sort(key=lambda x: x[0])
 
@@ -863,17 +959,56 @@ class AsyncPoller(QObject):
                             except Exception:
                                 pass
                             try:
-                                res = await self.controller.read_tag_value_async(
-                                fake_tag,
-                                host=host_local,
-                                port=port_local,
-                                unit=unit,
-                                timeout=mapped_request_timeout,
-                                connect_timeout=mapped_connect_timeout,
-                                diag_callback=self._emit_diag,
-                                client_mode=client_mode_local,
-                                client_params=client_params_local,
-                            )
+                                # wrap diag_callback to include device context so diagnostics
+                                # can be filtered per-device (DEV_ID / HOST / PORT)
+                                try:
+                                    dev_id_ctx = id(dev) if dev is not None else 0
+                                except Exception:
+                                    dev_id_ctx = 0
+                                prefix = f"DEV_ID={dev_id_ctx} HOST={host_local} PORT={port_local} "
+                                # assign an operation id so we can correlate logs for a single controller read
+                                try:
+                                    op_id = uuid.uuid4().hex[:8]
+                                except Exception:
+                                    op_id = str(time.time())
+                                poller_key = getattr(self, '__conn_key__', id(self))
+                                prefix2 = f"OP={op_id} POLLER={poller_key} {prefix}"
+                                def _diag_with_ctx(msg):
+                                    try:
+                                        self._emit_diag(prefix2 + str(msg))
+                                    except Exception:
+                                        try:
+                                            self._emit_diag(str(msg))
+                                        except Exception:
+                                            pass
+
+                                # serialize requests on the same physical/logical bus
+                                try:
+                                    self._emit_diag(f"BUS_LOCK_LOOKUP: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                except Exception:
+                                    pass
+                                lock = get_bus_lock(host=host_local, port=port_local, client_params=client_params_local, client_mode=client_mode_local)
+                                async with lock:
+                                    try:
+                                        self._emit_diag(f"BUS_LOCK_ACQUIRED: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                    except Exception:
+                                        pass
+                                    res = await self.controller.read_tag_value_async(
+                                        fake_tag,
+                                        host=host_local,
+                                        port=port_local,
+                                        unit=unit,
+                                        timeout=mapped_request_timeout,
+                                        connect_timeout=mapped_connect_timeout,
+                                        diag_callback=_diag_with_ctx,
+                                        client_mode=client_mode_local,
+                                        client_params=client_params_local,
+                                        inter_request_delay=inter_delay_local,
+                                        )
+                                    try:
+                                        self._emit_diag(f"BUS_LOCK_RELEASE: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                    except Exception:
+                                        pass
                             except Exception as e:
                                 try:
                                     import traceback
@@ -893,12 +1028,51 @@ class AsyncPoller(QObject):
 
                         # obtain normalized bytes for this response
                         db = getattr(res, 'data_bytes', None)
+                        regs = []
+                        # Special-case coil/discrete responses: many pymodbus versions
+                        # expose a `.bits` list rather than `registers` or `data_bytes`.
+                        # Convert bit list -> bytes (LSB in byte 0) so decoder can
+                        # uniformly parse boolean payloads.
+                        try:
+                            if fc in (1, 2) and hasattr(res, 'bits'):
+                                bits = getattr(res, 'bits') or []
+                                if bits:
+                                    b_chunks = []
+                                    i = 0
+                                    while i < len(bits):
+                                        byte_val = 0
+                                        for j in range(8):
+                                            if i + j < len(bits) and bits[i + j]:
+                                                byte_val |= (1 << j)
+                                        b_chunks.append(byte_val.to_bytes(1, 'big'))
+                                        i += 8
+                                    db = b"".join(b_chunks)
+                        except Exception:
+                            pass
+
                         if not db:
                             try:
                                 regs = getattr(res, 'registers', None) or []
                                 db = b"".join(int(r & 0xFFFF).to_bytes(2, 'big') for r in regs)
                             except Exception:
                                 db = b""
+                        else:
+                            try:
+                                regs = getattr(res, 'registers', None) or []
+                            except Exception:
+                                regs = []
+
+                        # Emit diagnostic about this chunk's payload vs expected length
+                        try:
+                            exp_len = None
+                            try:
+                                # expected bytes correspond to this chunk's register count
+                                exp_len = int(ccount) * 2
+                            except Exception:
+                                exp_len = None
+                            self._emit_diag(f"DECODE_CHUNK: addr={fake_addr} fc={fc} chunk_start={cstart} chunk_count={ccount} expected_bytes={exp_len} got_bytes={len(db)} regs_len={len(regs)} regs={list(regs) if hasattr(regs, '__iter__') else regs}")
+                        except Exception:
+                            pass
 
                         # read encoding flags for this device
                         try:
@@ -921,19 +1095,111 @@ class AsyncPoller(QObject):
                         for off, cnt, per_regs, base_dtype, arr_len, tag_item in sub_members:
                             try:
                                 rel_off = off - cstart
+                                need_fallback = False
+                                # compute slice bounds depending on bit/register
                                 if fc in (1, 2):
                                     bit_start = rel_off
                                     byte_start = bit_start // 8
                                     need_bits = (bit_start % 8) + cnt
                                     byte_len = math.ceil(need_bits / 8)
+                                    # if chunk payload too short for this member, mark fallback
+                                    if len(db) < (byte_start + byte_len):
+                                        need_fallback = True
                                     slice_bytes = db[byte_start:byte_start + byte_len]
-                                    val = _decode_bytes_for_tag(base_dtype, slice_bytes, arr_len, is_bits=True, start_bit=(bit_start % 8), bit_order_enable=bit_order_enable)
+                                    if not need_fallback:
+                                        val = _decode_bytes_for_tag(base_dtype, slice_bytes, arr_len, is_bits=True, start_bit=(bit_start % 8), bit_order_enable=bit_order_enable)
                                 else:
                                     byte_start = rel_off * 2
                                     byte_len = cnt * 2
+                                    if len(db) < (byte_start + byte_len):
+                                        need_fallback = True
                                     slice_bytes = db[byte_start:byte_start + byte_len]
-                                    val = _decode_bytes_for_tag(base_dtype, slice_bytes, arr_len, is_bits=False, start_bit=0, bit_order_enable=bit_order_enable, treat_long=treat_long)
-                                
+                                    if not need_fallback:
+                                        val = _decode_bytes_for_tag(base_dtype, slice_bytes, arr_len, is_bits=False, start_bit=0, bit_order_enable=bit_order_enable, treat_long=treat_long)
+
+                                # If this member's bytes are missing or incomplete in the chunk, try a single-tag read fallback
+                                if need_fallback:
+                                    try:
+                                        self._emit_diag(f"CHUNK_MISS_FALLBACK: member_addr={tag_item.data(1, Qt.ItemDataRole.UserRole)} chunk_start={cstart} chunk_count={ccount}")
+                                    except Exception:
+                                        pass
+                                    # perform single-tag read using same client mapping
+                                    try:
+                                        try:
+                                            dev_id_ctx = id(dev) if dev is not None else 0
+                                        except Exception:
+                                            dev_id_ctx = 0
+                                        prefix = f"DEV_ID={dev_id_ctx} HOST={host_local} PORT={port_local} "
+                                        try:
+                                            op_id2 = uuid.uuid4().hex[:8]
+                                        except Exception:
+                                            op_id2 = str(time.time())
+                                        poller_key2 = getattr(self, '__conn_key__', id(self))
+                                        prefix_single = f"OP={op_id2} POLLER={poller_key2} {prefix}"
+                                        def _diag_single_with_ctx(msg):
+                                            try:
+                                                self._emit_diag(prefix_single + str(msg))
+                                            except Exception:
+                                                try:
+                                                    self._emit_diag(str(msg))
+                                                except Exception:
+                                                    pass
+
+                                        try:
+                                            self._emit_diag(f"BUS_LOCK_LOOKUP_SINGLE: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                        except Exception:
+                                            pass
+                                        lock_single = get_bus_lock(host=host_local, port=port_local, client_params=client_params_local, client_mode=client_mode_local)
+                                        async with lock_single:
+                                            try:
+                                                self._emit_diag(f"BUS_LOCK_ACQUIRED_SINGLE: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                            except Exception:
+                                                pass
+                                            single_res = await self.controller.read_tag_value_async(
+                                                tag_item,
+                                                host=host_local,
+                                                port=port_local,
+                                                unit=unit,
+                                                timeout=mapped_request_timeout,
+                                                connect_timeout=mapped_connect_timeout,
+                                                diag_callback=_diag_single_with_ctx,
+                                                client_mode=client_mode_local,
+                                                client_params=client_params_local,
+                                                inter_request_delay=inter_delay_local,
+                                            )
+                                            try:
+                                                self._emit_diag(f"BUS_LOCK_RELEASE_SINGLE: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                            except Exception:
+                                                pass
+                                    except Exception:
+                                        single_res = None
+
+                                    db_single = None
+                                    regs_single = []
+                                    if single_res is not None:
+                                        db_single = getattr(single_res, 'data_bytes', None)
+                                        try:
+                                            regs_single = getattr(single_res, 'registers', None) or []
+                                        except Exception:
+                                            regs_single = []
+                                        if not db_single:
+                                            try:
+                                                db_single = b"".join(int(r & 0xFFFF).to_bytes(2, 'big') for r in regs_single)
+                                            except Exception:
+                                                db_single = b""
+
+                                    if db_single:
+                                        try:
+                                            if fc in (1, 2):
+                                                # single read for bits: decode from db_single starting at bit 0
+                                                val = _decode_bytes_for_tag(base_dtype, db_single, arr_len, is_bits=True, start_bit=0, bit_order_enable=bit_order_enable)
+                                            else:
+                                                val = _decode_bytes_for_tag(base_dtype, db_single, arr_len, is_bits=False, start_bit=0, bit_order_enable=bit_order_enable, treat_long=treat_long)
+                                        except Exception:
+                                            val = None
+                                    else:
+                                        val = None
+
                                 if val is not None:
                                     tid = id(tag_item)
                                     last = self._last_emit_times.get(tid)
@@ -952,12 +1218,8 @@ class AsyncPoller(QObject):
 
                         # clear current tag marker
                         self._current_tag = None
-                        # inter-request delay (device-specific)
-                        try:
-                            if inter_delay_local > 0:
-                                await asyncio.sleep(inter_delay_local)
-                        except Exception:
-                            pass
+                        # inter-request delay is handled by controller.read_tag_value_async
+                        # (controller will wait after RX before returning when configured)
                 except Exception:
                     try:
                         for (_, _, _, _, _, tag_item) in members:

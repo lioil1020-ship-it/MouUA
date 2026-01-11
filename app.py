@@ -69,38 +69,214 @@ class MonitorWindow(QMainWindow):
 
 
 class TerminalWindow(QMainWindow):
-    """終端視窗 - 顯示診斷信息"""
-    def __init__(self, parent=None):
+    """終端視窗 - 顯示診斷信息。
+    支援以 device_item 為過濾，當 device_item 為 None 時顯示全部訊息（global）。
+    """
+    def __init__(self, parent=None, device_item=None):
         super().__init__(parent)
-        self.setWindowTitle("Diagnostics")
+        self.device_item = device_item
+        self.setWindowTitle("Diagnostics" if device_item is None else f"Diagnostics - {self._device_path(device_item)}")
         self.resize(1000, 600)
-        
+
         # 主容器
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
-        
-        # Diagnostics table
+
+        # Diagnostics table (Kepware-like columns)
         self.diagnostics_table = QTableWidget()
-        self.diagnostics_table.setColumnCount(2)
-        self.diagnostics_table.setHorizontalHeaderLabels(["⏱️ 時間", "📡 通訊碼"]) 
+        # Date, Time, Event, Length, Data
+        self.diagnostics_table.setColumnCount(5)
+        self.diagnostics_table.setHorizontalHeaderLabels(["Date", "Time", "Event", "Length", "Data"])
         self.diagnostics_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.diagnostics_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        
+
         # 隱藏左邊的流水序號
         self.diagnostics_table.verticalHeader().setVisible(False)
-        
+
         header = self.diagnostics_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.diagnostics_table.setColumnWidth(0, 130)  # 時間欄寬度，適應 hh:mm:ss.SSS 格式
-        
+        # 讓欄位依內容自動調整寬度；若總寬度超出視窗則顯示橫向捲軸
+        for col in range(self.diagnostics_table.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        # 不要換行，讓資料一行呈現以便觸發水平捲軸
+        self.diagnostics_table.setWordWrap(False)
+        # 顯示橫向捲軸（必要時），保持預設垂直捲軸行為
+        self.diagnostics_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         layout.addWidget(self.diagnostics_table)
-        
+
         self.parent_window = parent
-        
+
+        # 準備 device 相關快取，用於訊息過濾
+        self._device_tag_ids = set()
+        self._device_path_str = None
+        self._device_unit = None
+        if device_item is not None:
+            try:
+                # collect tag ids under device
+                for i in range(device_item.childCount()):
+                    c = device_item.child(i)
+                    if c.data(0, Qt.ItemDataRole.UserRole) == "Tag":
+                        try:
+                            self._device_tag_ids.add(id(c))
+                        except Exception:
+                            pass
+                # build device path like Channel1.Device1
+                self._device_path_str = self._device_path(device_item)
+                # try to read configured unit id from device (common stored at role index 2)
+                try:
+                    u = device_item.data(2, Qt.ItemDataRole.UserRole)
+                    if u is not None:
+                        try:
+                            self._device_unit = int(u)
+                        except Exception:
+                            self._device_unit = None
+                except Exception:
+                    self._device_unit = None
+                try:
+                    self._device_item_id = id(device_item)
+                except Exception:
+                    self._device_item_id = None
+            except Exception:
+                pass
+
         # 建立菜單欄
         self._setup_menu()
+
+    def _device_path(self, item):
+        parts = []
+        it = item
+        while it is not None and it.data(0, Qt.ItemDataRole.UserRole) != "Connectivity":
+            parts.insert(0, it.text(0))
+            it = it.parent()
+        return ".".join(parts)
+
+    def matches_message(self, text: str) -> bool:
+        """決定訊息是否應顯示在此視窗。
+        規則：若為 global（device_item is None）則全部接受；
+        否則檢查是否包含 tag id (id=12345) 或裝置 path 或裝置名稱。
+        """
+        if self.device_item is None:
+            return True
+        try:
+            txt = str(text or "")
+            # If the poller prefixed device context, trust it first (DEV_ID/HOST/PORT)
+            try:
+                import re
+                m2 = re.search(r"DEV_ID=(\d+)", txt)
+                if m2:
+                    try:
+                        if self._device_item_id is not None and int(m2.group(1)) == int(self._device_item_id):
+                            return True
+                        else:
+                            return False
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # If message contains TX/RX hex, try to extract unit id and match to this device.
+            if "TX:" in txt or "RX:" in txt:
+                try:
+                    import re
+                    m = re.search(r"\|\s*([0-9A-Fa-f\s]+)\s*\|", txt)
+                    if m:
+                        hex_s = m.group(1)
+                        parts = [p for p in hex_s.split() if p]
+                        bytes_list = [int(p, 16) for p in parts if len(p) <= 2]
+                        if bytes_list:
+                            # MBAP: txid(2)+prot(2)+len(2)+unit(1) -> unit at index 6
+                            candidate_unit = None
+                            if len(bytes_list) >= 7:
+                                candidate_unit = bytes_list[6]
+                            # RTU or fallback: unit is first byte
+                            if candidate_unit is None:
+                                candidate_unit = bytes_list[0]
+                            if self._device_unit is not None:
+                                try:
+                                    if int(candidate_unit) == int(self._device_unit):
+                                        return True
+                                    else:
+                                        return False
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+            # match id=NUMBER
+            import re
+            for m in re.finditer(r"id=(\d+)", txt):
+                try:
+                    if int(m.group(1)) in self._device_tag_ids:
+                        return True
+                except Exception:
+                    pass
+            # match device path or name
+            if self._device_path_str and self._device_path_str in txt:
+                return True
+            if self.device_item.text(0) and self.device_item.text(0) in txt:
+                return True
+        except Exception:
+            pass
+        return False
+
+    def add_message(self, ts: str, text: str):
+        try:
+            from datetime import datetime as _dt
+            # ts is a time string like HH:MM:SS.mmm; build date string for Date col
+            try:
+                date_str = _dt.now().strftime("%Y/%m/%d")
+            except Exception:
+                date_str = ""
+
+            row = self.diagnostics_table.rowCount()
+            self.diagnostics_table.insertRow(row)
+
+            # Event/Length/Data parsing
+            event = ""
+            length = ""
+            data_text = str(text or "")
+            try:
+                import re
+                m = re.search(r"TX:\s*\|\s*([0-9A-Fa-f\s]+)\s*\|", text)
+                if not m:
+                    m = re.search(r"RX:\s*\|\s*([0-9A-Fa-f\s]+)\s*\|", text)
+                if m:
+                    hex_s = m.group(1)
+                    # normalize spacing
+                    parts = [p for p in hex_s.split() if p]
+                    data_text = " ".join(p.upper() for p in parts)
+                    try:
+                        length = str(len(parts))
+                    except Exception:
+                        length = ""
+                    if 'TX:' in text:
+                        event = 'TX'
+                    elif 'RX:' in text:
+                        event = 'RX'
+                else:
+                    # fallback: try to show entire text in Data
+                    data_text = text
+            except Exception:
+                data_text = text
+
+            date_item = QTableWidgetItem(date_str)
+            date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            time_item = QTableWidgetItem(ts)
+            time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            event_item = QTableWidgetItem(event)
+            event_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            length_item = QTableWidgetItem(length)
+            length_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            data_item = QTableWidgetItem(data_text)
+
+            self.diagnostics_table.setItem(row, 0, date_item)
+            self.diagnostics_table.setItem(row, 1, time_item)
+            self.diagnostics_table.setItem(row, 2, event_item)
+            self.diagnostics_table.setItem(row, 3, length_item)
+            self.diagnostics_table.setItem(row, 4, data_item)
+            self.diagnostics_table.scrollToBottom()
+        except Exception:
+            pass
     
     def _setup_menu(self):
         """設置菜單欄"""
@@ -155,16 +331,20 @@ class TerminalWindow(QMainWindow):
                 file_path = file_path + ".txt"
             try:
                 with open(file_path, 'w', encoding='utf-8') as f:
-                    # 寫入表頭
-                    f.write("時間\t通訊碼\n")
+                    # 寫入表頭（所有欄位）
+                    headers = []
+                    for c in range(self.diagnostics_table.columnCount()):
+                        h = self.diagnostics_table.horizontalHeaderItem(c)
+                        headers.append(h.text() if h is not None else "")
+                    f.write("\t".join(headers) + "\n")
                     f.write("-" * 100 + "\n")
-                    # 寫入所有行
+                    # 寫入每一列的所有欄位，Tab 分隔
                     for row in range(self.diagnostics_table.rowCount()):
-                        time_item = self.diagnostics_table.item(row, 0)
-                        msg_item = self.diagnostics_table.item(row, 1)
-                        time_text = time_item.text() if time_item else ""
-                        msg_text = msg_item.text() if msg_item else ""
-                        f.write(f"{time_text}\t{msg_text}\n")
+                        cols = []
+                        for c in range(self.diagnostics_table.columnCount()):
+                            item = self.diagnostics_table.item(row, c)
+                            cols.append(item.text() if item is not None else "")
+                        f.write("\t".join(cols) + "\n")
                 QMessageBox.information(self, "成功", f"已匯出到：{file_path}")
             except Exception as e:
                 QMessageBox.warning(self, "錯誤", f"匯出失敗：{str(e)}")
@@ -254,6 +434,8 @@ class IoTApp(QMainWindow):
         
         # 創建獨立的 Terminal 窗口（診斷視窗）
         self.terminal_window = TerminalWindow(self)
+        # 管理多個 diagnostics 視窗（包含 global 與 per-device windows）
+        self.terminal_windows = [self.terminal_window]
 
         # Install pymodbus log handler to capture SEND/RECV and forward to Diagnostics
         try:
@@ -281,6 +463,7 @@ class IoTApp(QMainWindow):
                         else:
                             hex_bytes = re.findall(r'\\x[0-9a-fA-F]{2}', msg)
                             if hex_bytes:
+ 
                                 hex_str = " ".join(h.replace('\\x','').upper() for h in hex_bytes)
                             else:
                                 hex_str = msg
@@ -343,6 +526,12 @@ class IoTApp(QMainWindow):
         self.tree.request_new_device.connect(self.on_new_device)
         self.tree.request_new_group.connect(self.on_new_group)
         self.tree.request_new_tag.connect(self.on_new_tag)
+
+        # device diagnostics (right-click on Device node)
+        try:
+            self.tree.request_device_diagnostics.connect(self.open_device_diagnostics)
+        except Exception:
+            pass
 
         self.tree.request_edit_item.connect(self.on_edit_item)
         self.tree.request_delete_item.connect(self.on_delete_item)
@@ -444,10 +633,7 @@ class IoTApp(QMainWindow):
         # keep reference so we can update the indicator text/color emoji
         self.runtime_indicator_action = runtime_indicator
         
-        # --- Diagnostics button (直接彈出) ---
-        terminal_action = QAction("📊 Diagnostics", self)
-        terminal_action.triggered.connect(self.show_terminal_window)
-        self.menuBar().addAction(terminal_action)
+        # Diagnostics is now exposed via Device right-click in the tree.
 
         # --- OPC UA button (open settings) ---
         opcua_action = QAction("🔗 OPC UA", self)
@@ -576,6 +762,19 @@ class IoTApp(QMainWindow):
         self.terminal_window.show()
         self.terminal_window.raise_()
         self.terminal_window.activateWindow()
+
+    def open_device_diagnostics(self, device_item):
+        """Open a diagnostics window filtered to the given device_item."""
+        try:
+            tw = TerminalWindow(self, device_item=device_item)
+            self.terminal_windows.append(tw)
+            tw.show()
+            tw.raise_()
+            tw.activateWindow()
+            # return created window in case caller needs it
+            return tw
+        except Exception:
+            return None
 
     # Methods called by TerminalWindow menu actions to update diagnostics flags
     def _set_diag_show_only_txrx(self, v: bool):
@@ -1682,11 +1881,70 @@ class IoTApp(QMainWindow):
             if interval is None:
                 interval = di
 
-        return (host, port, unit, interval)
+        # determine function code (fc) from tag address prefix so pollers
+        # can be separated per FC when desired. Follow Kepware mapping:
+        # 0xxxx -> FC1 (coils), 1xxxx -> FC2 (discrete inputs),
+        # 3xxxx -> FC4 (input registers), 4xxxx -> FC3 (holding regs)
+        fc = 3
+        try:
+            addr_raw = tag_item.data(1, Qt.ItemDataRole.UserRole)
+        except Exception:
+            addr_raw = None
+        try:
+            def _digits(s):
+                if s is None:
+                    return ""
+                return "".join(ch for ch in str(s) if ch.isdigit())
+            nums = _digits(addr_raw)
+            if len(nums) == 5 and nums.startswith("4"):
+                nums = nums[0] + "0" + nums[1:]
+            nums = nums.zfill(6)
+            lead = nums[0] if nums else "4"
+            if lead in ("0", "1"):
+                fc = 1 if lead == "0" else 2
+            elif lead == "3":
+                fc = 4
+            elif lead == "4":
+                fc = 3
+            else:
+                fc = 3
+        except Exception:
+            fc = 3
+
+        return (host, port, unit, interval, fc)
 
     def append_diagnostic(self, text: str):
         import time as _time
         import threading
+
+        def _find_device_item_by_id(dev_id):
+            try:
+                root = getattr(self, 'tree', None)
+                if root is None:
+                    return None
+                conn = getattr(root, 'conn_node', None)
+                if conn is None:
+                    return None
+
+                def _walk(node):
+                    try:
+                        if id(node) == int(dev_id):
+                            return node
+                    except Exception:
+                        pass
+                    try:
+                        for i in range(node.childCount()):
+                            child = node.child(i)
+                            found = _walk(child)
+                            if found:
+                                return found
+                    except Exception:
+                        pass
+                    return None
+
+                return _walk(conn)
+            except Exception:
+                return None
 
         # Only show a minimal set of diagnostics to reduce noise in the UI.
         # Whitelist: keep TX/RX lines and connection info that begins with 'Using '
@@ -1732,20 +1990,72 @@ class IoTApp(QMainWindow):
         
         def _add_to_table():
             try:
-                # 添加行到表格
-                row = self.terminal_window.diagnostics_table.rowCount()
-                self.terminal_window.diagnostics_table.insertRow(row)
-                
-                # 時間欄 - 置中
-                time_item = QTableWidgetItem(ts)
-                time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.terminal_window.diagnostics_table.setItem(row, 0, time_item)
-                
-                # 通訊碼欄
-                self.terminal_window.diagnostics_table.setItem(row, 1, QTableWidgetItem(text))
-                
-                # 自動滾動到最後一行
-                self.terminal_window.diagnostics_table.scrollToBottom()
+                # route message to all managed terminal windows that match the message
+                wins = getattr(self, 'terminal_windows', None)
+                if not wins:
+                    wins = [getattr(self, 'terminal_window', None)]
+                for tw in list(wins):
+                    try:
+                        if tw is None:
+                            continue
+                        try:
+                            # If message contains device context, try to tag transport type
+                            import re
+                            m_dev = re.search(r"DEV_ID=(\d+)", str(text or ""))
+                            if m_dev:
+                                dev_item = _find_device_item_by_id(int(m_dev.group(1)))
+                                transport_tag = None
+                                try:
+                                    if dev_item is not None:
+                                        ch = dev_item.parent()
+                                        if ch is not None and ch.data(0, Qt.ItemDataRole.UserRole) == "Channel":
+                                            ch_params = ch.data(2, Qt.ItemDataRole.UserRole) or {}
+                                            driver_name = (ch.data(1, Qt.ItemDataRole.UserRole) or "").lower()
+                                            method = str(ch_params.get('method') or driver_name or "").lower()
+                                            # determine transport
+                                            if 'rtu' in method or 'serial' in method or any(k in (ch_params or {}) for k in ('com', 'adapter', 'serial_port')):
+                                                transport_tag = 'SERIAL'
+                                            elif 'websocket' in method or ch_params.get('transport') in ('websocket', 'ws') or 'ws' in method:
+                                                transport_tag = 'WEBSOCKET'
+                                            else:
+                                                transport_tag = 'TCP'
+                                except Exception:
+                                    transport_tag = None
+                                if transport_tag:
+                                    # prefer to match terminal filtering on enriched text
+                                    enriched_text = f"[{transport_tag}] {text}"
+                                else:
+                                    enriched_text = text
+                            else:
+                                enriched_text = text
+
+                            if hasattr(tw, 'matches_message'):
+                                ok = tw.matches_message(enriched_text)
+                            else:
+                                ok = True
+                        except Exception:
+                            ok = True
+                        if ok:
+                            try:
+                                if hasattr(tw, 'add_message'):
+                                    # if we enriched the text above, pass the enriched variant
+                                    try:
+                                        tw.add_message(ts, enriched_text)
+                                    except Exception:
+                                        tw.add_message(ts, text)
+                                else:
+                                    # fallback: direct table insert
+                                    row = tw.diagnostics_table.rowCount()
+                                    tw.diagnostics_table.insertRow(row)
+                                    time_item = QTableWidgetItem(ts)
+                                    time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                                    tw.diagnostics_table.setItem(row, 0, time_item)
+                                    tw.diagnostics_table.setItem(row, 1, QTableWidgetItem(enriched_text if 'enriched_text' in locals() else text))
+                                    tw.diagnostics_table.scrollToBottom()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
             except Exception:
                 pass
         
@@ -2474,13 +2784,15 @@ class IoTApp(QMainWindow):
         groups = {}
         for t in list(self.monitored_tags):
             try:
-                key = self._compute_tag_conn_key(t, default=(host, port, unit, interval))
+                # include function code in the conn key (fc) so we can create
+                # pollers per (host,port,unit,interval,fc)
+                key = self._compute_tag_conn_key(t, default=(host, port, unit, interval, None))
                 groups.setdefault(key, []).append(t)
             except Exception:
-                groups.setdefault((host, port, unit, interval), []).append(t)
+                groups.setdefault((host, port, unit, interval, None), []).append(t)
 
         self.pollers = []
-        for (h, pnum, u, inv), tags_for_group in groups.items():
+        for (h, pnum, u, inv, fcc), tags_for_group in groups.items():
             try:
                 poller = AsyncPoller(self.controller, host=h, port=pnum, unit=u, interval=inv)
                 # attach serial metadata to poller so worker can emit appropriate diagnostics
@@ -2526,7 +2838,23 @@ class IoTApp(QMainWindow):
                     pass
                 # attach a lightweight connection key for runtime matching
                 try:
-                    setattr(poller, '__conn_key__', (h, pnum, u, inv))
+                    setattr(poller, '__conn_key__', (h, pnum, u, inv, fcc))
+                except Exception:
+                    pass
+                # emit diagnostic listing tags assigned to this poller for clarity
+                try:
+                    try:
+                        addrs = []
+                        for t in tags_for_group:
+                            try:
+                                a = t.data(1, Qt.ItemDataRole.UserRole)
+                                dt = t.data(2, Qt.ItemDataRole.UserRole)
+                                addrs.append(f"{a}:{dt}")
+                            except Exception:
+                                addrs.append(str(t))
+                        self.append_diagnostic(f"POLLER_CREATE: key={(h,pnum,u,inv,fcc)} tags={addrs}")
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 for t in tags_for_group:
@@ -2545,6 +2873,10 @@ class IoTApp(QMainWindow):
                 except Exception:
                     pass
                 poller.start()
+                try:
+                    self.append_diagnostic(f"POLLER_START: key={(h,pnum,u,inv)} running_tags={len(tags_for_group)}")
+                except Exception:
+                    pass
                 self.pollers.append(poller)
             except Exception:
                 pass
@@ -2604,8 +2936,17 @@ class IoTApp(QMainWindow):
                         pass
                     continue
                 
-                # 更新值
-                display = "" if elem_value is None else str(elem_value)
+                # 更新值 (布林顯示為 1/0)
+                if elem_value is None:
+                    display = ""
+                else:
+                    try:
+                        if isinstance(elem_value, bool):
+                            display = "1" if elem_value else "0"
+                        else:
+                            display = str(elem_value)
+                    except Exception:
+                        display = str(elem_value)
                 val_item = QTableWidgetItem(display)
                 val_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.monitor_table.setItem(row, 2, val_item)
@@ -2655,8 +2996,17 @@ class IoTApp(QMainWindow):
                     pass
                 return
             
-            # 更新值
-            display = "" if value is None else str(value)
+            # 更新值 (布林顯示為 1/0)
+            if value is None:
+                display = ""
+            else:
+                try:
+                    if isinstance(value, bool):
+                        display = "1" if value else "0"
+                    else:
+                        display = str(value)
+                except Exception:
+                    display = str(value)
             val_item = QTableWidgetItem(display)
             val_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.monitor_table.setItem(row, 2, val_item)
@@ -2950,9 +3300,15 @@ class IoTApp(QMainWindow):
             if not address_match:
                 QMessageBox.warning(self, "錯誤", f"無法解析地址: {address}")
                 return
-            
-            full_addr_num = int(address_match.group(1))
-            address_start = str(full_addr_num)[0] if full_addr_num >= 10000 else "4"
+
+            digit_str = address_match.group(1)
+            full_addr_num = int(digit_str)
+            # Determine leading digit from the original Kepware-style address string
+            # (preserve leading zeros such as '000103' -> '0').
+            try:
+                address_start = digit_str.zfill(5)[0]
+            except Exception:
+                address_start = str(full_addr_num)[0]
             
             # 判斷寄存器寬度
             regs_per_element = self._determine_register_width(data_type)
@@ -2968,11 +3324,24 @@ class IoTApp(QMainWindow):
                 QMessageBox.warning(self, "錯誤", f"Modbus地址超過上限: {actual_addr}")
                 return
             
-            # 轉換值
+            # 轉換值（Boolean 以 1/0 處理）
             try:
-                if "Int" in str(data_type):
+                dt_s = str(data_type) if data_type is not None else ""
+                if "Boolean" in dt_s or dt_s.lower().startswith("bool"):
+                    s = str(value).strip().lower()
+                    if s in ("1", "true", "yes", "on", "t", "y"):
+                        write_value = 1
+                    elif s in ("0", "false", "no", "off", "f", "n"):
+                        write_value = 0
+                    else:
+                        try:
+                            write_value = 1 if int(float(value)) != 0 else 0
+                        except Exception:
+                            QMessageBox.warning(self, "錯誤", f"數值轉換失敗(布林): {value}")
+                            return
+                elif "Int" in dt_s:
                     write_value = int(value)
-                elif "Float" in str(data_type):
+                elif "Float" in dt_s:
                     write_value = float(value)
                 else:
                     write_value = float(value)
