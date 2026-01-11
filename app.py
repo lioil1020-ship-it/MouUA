@@ -2259,6 +2259,29 @@ class IoTApp(QMainWindow):
                             self.append_diagnostic('OPC UA: setup_tags_from_tree completed after OPC UA settings applied')
                         except Exception:
                             pass
+
+                        # ensure the periodic OPC UA push timer exists when server and data broker are present
+                        try:
+                            if getattr(self, 'opc_server', None) and getattr(self, 'data_broker', None):
+                                if self._opc_update_timer is None:
+                                    self._opc_update_timer = QTimer(self)
+                                    self._opc_update_timer.setInterval(200)
+
+                                    def _push():
+                                        try:
+                                            snap = self.data_broker.snapshot()
+                                            for k, v in snap.items():
+                                                try:
+                                                    self.opc_server.update_tag(k, v.get('value'))
+                                                except Exception:
+                                                    pass
+                                        except Exception:
+                                            pass
+
+                                    self._opc_update_timer.timeout.connect(_push)
+                                    self._opc_update_timer.start()
+                        except Exception:
+                            pass
                     except Exception as e:
                         try:
                             import traceback
