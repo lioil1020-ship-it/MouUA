@@ -76,8 +76,6 @@ class DataBroker:
                 key_parts.append(g)
             key_parts.append(tn or str(id(tag_item)))
             return ".".join(key_parts)
-
-            return ".".join(parts) if parts else str(id(tag_item))
         except Exception:
             try:
                 return tag_item.text(0)

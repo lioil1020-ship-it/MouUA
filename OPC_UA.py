@@ -47,6 +47,81 @@ class OPCServer:
         self._is_running = False
         self._thread = None
         self._nodes = {}  # mapping from tag id -> {node, type}
+        # helper mapping cache for dtype -> ua.VariantType
+        self._dtype_map_cache = {}
+
+    def _map_dtype_to_variant(self, dtype: str):
+        """Map a textual dtype (e.g. 'Int', 'Float', 'Double') to a ua.VariantType.
+        Defaults to Int16 on unknown.
+        """
+        try:
+            key = (dtype or '').strip().lower()
+            if key in self._dtype_map_cache:
+                return self._dtype_map_cache[key]
+            if 'double' in key:
+                vt = ua.VariantType.Double
+            elif 'float' in key:
+                vt = ua.VariantType.Float
+            elif 'bool' in key or 'boolean' in key or 'bit' in key or 'coil' in key:
+                vt = ua.VariantType.Boolean
+            elif 'qword' in key or 'uint64' in key or 'ulong' in key:
+                vt = ua.VariantType.UInt64
+            elif 'llong' in key or 'int64' in key or 'long long' in key:
+                vt = ua.VariantType.Int64
+            elif 'dword' in key or 'uint32' in key or 'unsigned long' in key:
+                vt = ua.VariantType.UInt32
+            elif 'long' in key and 'llong' not in key:
+                vt = ua.VariantType.Int32
+            elif 'word' in key or 'uint16' in key:
+                vt = ua.VariantType.UInt16
+            elif 'short' in key or 'int16' in key:
+                vt = ua.VariantType.Int16
+            elif 'byte' in key:
+                vt = ua.VariantType.Byte
+            elif 'bcd' in key:
+                vt = ua.VariantType.UInt32
+            else:
+                vt = ua.VariantType.Int16
+            self._dtype_map_cache[key] = vt
+            return vt
+        except Exception:
+            return ua.VariantType.Int16
+
+    def _map_dtype_to_nodeid(self, dtype: str):
+        """Map textual dtype to an appropriate UA built-in DataType NodeId."""
+        try:
+            k = (dtype or '').strip().lower()
+            if 'bool' in k or 'boolean' in k or 'bit' in k or 'coil' in k:
+                return ua.NodeId(ua.ObjectIds.Boolean)
+            if 'string' in k or 'char' in k:
+                return ua.NodeId(ua.ObjectIds.String)
+            if 'byte' in k and 'word' not in k:
+                return ua.NodeId(ua.ObjectIds.Byte)
+            if 'double' in k:
+                return ua.NodeId(ua.ObjectIds.Double)
+            if 'float' in k:
+                return ua.NodeId(ua.ObjectIds.Float)
+            if 'qword' in k or 'uint64' in k or 'ulong' in k:
+                return ua.NodeId(ua.ObjectIds.UInt64)
+            if 'llong' in k or 'int64' in k or 'long long' in k:
+                return ua.NodeId(ua.ObjectIds.Int64)
+            if 'dword' in k or 'uint32' in k or 'unsigned long' in k:
+                return ua.NodeId(ua.ObjectIds.UInt32)
+            if 'long' in k and 'llong' not in k:
+                return ua.NodeId(ua.ObjectIds.Int32)
+            if 'lbcd' in k or 'l_bcd' in k or ('l' in k and 'bcd' in k):
+                return ua.NodeId(ua.ObjectIds.UInt64)
+            if 'bcd' in k:
+                return ua.NodeId(ua.ObjectIds.UInt32)
+            if 'word' in k or 'uint16' in k:
+                return ua.NodeId(ua.ObjectIds.UInt16)
+            if 'short' in k or 'int16' in k:
+                return ua.NodeId(ua.ObjectIds.Int16)
+            if 'int' in k:
+                return ua.NodeId(ua.ObjectIds.Int32)
+            return ua.NodeId(ua.ObjectIds.Int16)
+        except Exception:
+            return ua.NodeId(ua.ObjectIds.Int16)
 
     def _prepare_server(self):
         if Server is None:
@@ -193,14 +268,22 @@ class OPCServer:
         # 創建一個物件節點以 group tags（以 namespace index 為參考）
         folder = self._objects
         # Use a simple flat node: Objects -> name
-        var = folder.add_variable(self._nsidx, name, 0)
+        try:
+            vt = self._map_dtype_to_variant(dtype)
+            init_val = ua.Variant(0, vt)
+            var = folder.add_variable(self._nsidx, name, init_val)
+        except Exception:
+            var = folder.add_variable(self._nsidx, name, 0)
         # set writable according to provided meta (client access)
+        writable = True
         try:
             access = tag_meta.get('access') or tag_meta.get('client_access') or ''
             if isinstance(access, str) and 'read' in access.lower() and 'write' not in access.lower():
-                var.set_writable(False)
-            else:
-                var.set_writable(True)
+                writable = False
+        except Exception:
+            writable = True
+        try:
+            var.set_writable(bool(writable))
         except Exception:
             try:
                 var.set_writable(True)
@@ -209,17 +292,16 @@ class OPCServer:
 
         # 嘗試根據 dtype 設定典型 UA 型別（簡易對應）
         try:
-            if 'float' in dtype:
-                var.set_data_type(ua.NodeId(ua.ObjectIds.Float))
-            elif 'double' in dtype:
-                var.set_data_type(ua.NodeId(ua.ObjectIds.Double))
-            else:
-                var.set_data_type(ua.NodeId(ua.ObjectIds.Int16))
+            kd = str(dtype).lower()
+            try:
+                var.set_data_type(self._map_dtype_to_nodeid(dtype))
+            except Exception:
+                pass
         except Exception:
             pass
 
-        # store node and type for later coercion
-        self._nodes[tid] = {"node": var, "type": dtype}
+        # store node, type and writable flag for later coercion
+        self._nodes[tid] = {"node": var, "type": dtype, "writable": bool(writable)}
         return var
 
     def setup_tags_from_config(self, devices_config):
@@ -229,6 +311,9 @@ class OPCServer:
             'name' and 'tags' (list of tag dicts with 'name','id','data_type')
 
         Resulting structure: Objects -> DeviceName -> (optional GroupName) -> Tag
+
+        注意：此為 API 輔助函式，可能由外部配置/部署流程動態呼叫以建立節點，
+        因此請勿移除。
         """
         if not self._server:
             raise RuntimeError("Server not started")
@@ -257,28 +342,35 @@ class OPCServer:
                 tag_id = tag.get('id') or f"{dev_name}.{tag.get('name')}"
                 tag_name = tag.get('name') or tag_id
                 dtype = tag.get('data_type') or 'Int'
-                node = dev_node.add_variable(self._nsidx, tag_name, 0)
+                try:
+                    vt = self._map_dtype_to_variant(dtype)
+                    node = dev_node.add_variable(self._nsidx, tag_name, ua.Variant(0, vt))
+                except Exception:
+                    node = dev_node.add_variable(self._nsidx, tag_name, 0)
+                # determine writable
+                writable = True
                 try:
                     access = tag.get('access') or tag.get('client_access') or ''
                     if isinstance(access, str) and 'read' in access.lower() and 'write' not in access.lower():
-                        node.set_writable(False)
-                    else:
-                        node.set_writable(True)
+                        writable = False
+                except Exception:
+                    writable = True
+                try:
+                    node.set_writable(bool(writable))
                 except Exception:
                     try:
                         node.set_writable(True)
                     except Exception:
                         pass
                 try:
-                    if 'float' in str(dtype).lower():
-                        node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
-                    elif 'double' in str(dtype).lower():
-                        node.set_data_type(ua.NodeId(ua.ObjectIds.Double))
-                    else:
-                        node.set_data_type(ua.NodeId(ua.ObjectIds.Int16))
+                    kd = str(dtype).lower()
+                    try:
+                        node.set_data_type(self._map_dtype_to_nodeid(dtype))
+                    except Exception:
+                        pass
                 except Exception:
                     pass
-                self._nodes[tag_id] = {"node": node, "type": dtype}
+                self._nodes[tag_id] = {"node": node, "type": dtype, "writable": bool(writable)}
 
     def setup_tags_from_tree(self, conn_root_item):
         """Walk a PyQt tree `conn_root_item` (Connectivity root) and create nodes.
@@ -370,19 +462,30 @@ class OPCServer:
                                 # if array_len present, create an array initial value
                                 try:
                                     if array_len and int(array_len) > 0:
-                                        # create list of zeros with appropriate type
                                         base = dtype or 'Int'
                                         dt = str(base).lower()
-                                        if 'float' in dt or 'double' in dt:
-                                            init_val = [0.0] * int(array_len)
-                                        else:
-                                            init_val = [0] * int(array_len)
-                                        node = dev_node.add_variable(self._nsidx, tag_name, init_val)
+                                        try:
+                                            vt = self._map_dtype_to_variant(base)
+                                            if 'float' in dt or 'double' in dt:
+                                                init_list = [0.0] * int(array_len)
+                                            else:
+                                                init_list = [0] * int(array_len)
+                                            node = dev_node.add_variable(self._nsidx, tag_name, ua.Variant(init_list, vt))
+                                        except Exception:
+                                            if 'float' in dt or 'double' in dt:
+                                                init_val = [0.0] * int(array_len)
+                                            else:
+                                                init_val = [0] * int(array_len)
+                                            node = dev_node.add_variable(self._nsidx, tag_name, init_val)
                                     else:
-                                        node = dev_node.add_variable(self._nsidx, tag_name, 0)
+                                        try:
+                                            vt = self._map_dtype_to_variant(dtype)
+                                            node = dev_node.add_variable(self._nsidx, tag_name, ua.Variant(0, vt))
+                                        except Exception:
+                                            node = dev_node.add_variable(self._nsidx, tag_name, 0)
                                 except Exception:
                                     node = dev_node.add_variable(self._nsidx, tag_name, 0)
-                                self._nodes[tag_id] = {"node": node, "type": dtype}
+                                self._nodes[tag_id] = {"node": node, "type": dtype, "writable": True}
 
                             # set writable based on Tag's client access (slot 9) if available
                             try:
@@ -390,22 +493,20 @@ class OPCServer:
                             except Exception:
                                 access_val = None
                             try:
+                                writable = True
                                 if isinstance(access_val, str) and 'read' in access_val.lower() and 'write' not in access_val.lower():
-                                    node.set_writable(False)
-                                else:
-                                    node.set_writable(True)
+                                    writable = False
+                                node.set_writable(bool(writable))
+                                # store writable flag if node known in mapping
+                                if tag_id in self._nodes:
+                                    self._nodes[tag_id]['writable'] = bool(writable)
                             except Exception:
                                 pass
 
-                            try:
-                                if 'float' in str(dtype).lower():
-                                    node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
-                                elif 'double' in str(dtype).lower():
-                                    node.set_data_type(ua.NodeId(ua.ObjectIds.Double))
-                                else:
-                                    node.set_data_type(ua.NodeId(ua.ObjectIds.Int16))
-                            except Exception:
-                                pass
+                                try:
+                                    node.set_data_type(self._map_dtype_to_nodeid(dtype))
+                                except Exception:
+                                    pass
                     # groups inside device
                     for g in range(dev.childCount()):
                         grp = dev.child(g)
@@ -455,30 +556,47 @@ class OPCServer:
                                     self._nodes[tag_id]['type'] = dtype
                                 else:
                                     if array_len and int(array_len) > 0:
-                                        if 'float' in str(dtype).lower() or 'double' in str(dtype).lower():
-                                            init_val = [0.0] * int(array_len)
-                                        else:
-                                            init_val = [0] * int(array_len)
-                                        node = grp_node.add_variable(self._nsidx, tag_name, init_val)
+                                        try:
+                                            vt = self._map_dtype_to_variant(dtype)
+                                            if 'float' in str(dtype).lower() or 'double' in str(dtype).lower():
+                                                init_list = [0.0] * int(array_len)
+                                            else:
+                                                init_list = [0] * int(array_len)
+                                            node = grp_node.add_variable(self._nsidx, tag_name, ua.Variant(init_list, vt))
+                                        except Exception:
+                                            if 'float' in str(dtype).lower() or 'double' in str(dtype).lower():
+                                                init_val = [0.0] * int(array_len)
+                                            else:
+                                                init_val = [0] * int(array_len)
+                                            node = grp_node.add_variable(self._nsidx, tag_name, init_val)
                                     else:
-                                        node = grp_node.add_variable(self._nsidx, tag_name, 0)
-                                    self._nodes[tag_id] = {"node": node, "type": dtype}
+                                        try:
+                                            vt = self._map_dtype_to_variant(dtype)
+                                            node = grp_node.add_variable(self._nsidx, tag_name, ua.Variant(0, vt))
+                                        except Exception:
+                                            node = grp_node.add_variable(self._nsidx, tag_name, 0)
+                                        self._nodes[tag_id] = {"node": node, "type": dtype, "writable": True}
 
                                 try:
                                     access_val2 = tag_item.data(9, Qt.ItemDataRole.UserRole) if Qt is not None else None
                                 except Exception:
                                     access_val2 = None
                                 try:
+                                    writable = True
                                     if isinstance(access_val2, str) and 'read' in access_val2.lower() and 'write' not in access_val2.lower():
-                                        node.set_writable(False)
-                                    else:
-                                        node.set_writable(True)
+                                        writable = False
+                                    node.set_writable(bool(writable))
+                                    if tag_id in self._nodes:
+                                        self._nodes[tag_id]['writable'] = bool(writable)
                                 except Exception:
                                     pass
                                 try:
-                                    if 'float' in str(dtype).lower():
+                                    kd = str(dtype).lower()
+                                    if 'bool' in kd or 'boolean' in kd or 'bit' in kd or 'coil' in kd:
+                                        node.set_data_type(ua.NodeId(ua.ObjectIds.Boolean))
+                                    elif 'float' in kd:
                                         node.set_data_type(ua.NodeId(ua.ObjectIds.Float))
-                                    elif 'double' in str(dtype).lower():
+                                    elif 'double' in kd:
                                         node.set_data_type(ua.NodeId(ua.ObjectIds.Double))
                                     else:
                                         node.set_data_type(ua.NodeId(ua.ObjectIds.Int16))
@@ -506,6 +624,37 @@ class OPCServer:
                 return True
             except Exception:
                 return False
+
+    def read_tag_value(self, tag_id):
+        """Return the current OPC UA value for a stored tag id, or None."""
+        entry = self._nodes.get(tag_id)
+        if not entry:
+            return None
+        node = entry.get('node')
+        try:
+            return node.get_value()
+        except Exception:
+            return None
+
+    def is_tag_writable(self, tag_id):
+        """Return True if the server-side node was marked writable when created."""
+        entry = self._nodes.get(tag_id)
+        if not entry:
+            return False
+        try:
+            return bool(entry.get('writable', True))
+        except Exception:
+            return True
+
+    def get_tag_dtype(self, tag_id):
+        """Return stored data type for tag_id.
+
+        Kept as a small public helper used when coercing values or mapping types; may be used dynamically.
+        """
+        entry = self._nodes.get(tag_id)
+        if not entry:
+            return None
+        return entry.get('type')
 
 
 if __name__ == '__main__':

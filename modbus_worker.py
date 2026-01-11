@@ -325,20 +325,34 @@ class AsyncPoller(QObject):
         self.interval = float(interval_seconds)
 
     def _emit_diag(self, text):
+        # Centralized filtering: only emit diagnostic lines that are useful
+        # for the UI/raw log to avoid flooding (e.g. TX/RX frames, write ops,
+        # and limited poll emissions). Suppress verbose internal traces.
+        try:
+            txt = str(text or "")
+            allowed_keywords = ("TX:", "RX:", "OPC->", "WRITE_CALL", "WRITE_OK", "WRITE_FAILED", "WRITE_DENIED", "EMIT_TAG_POLLED")
+            emit_allowed = any(k in txt for k in allowed_keywords)
+        except Exception:
+            emit_allowed = False
+
+        if not emit_allowed:
+            return
+
         # If we are running in the main asyncio loop (i.e. same thread as Qt),
         # emitting signals directly is fine. Otherwise post to Qt main thread.
-        if self._in_main_loop:
-            try:
-                self.diag_signal.emit(text)
-            except Exception:
-                pass
-        else:
-            # emitting the Qt signal from a background thread is thread-safe
-            # (it will be queued to the main thread). Just use emit directly.
-            try:
-                self.diag_signal.emit(text)
-            except Exception:
-                pass
+        try:
+            if self._in_main_loop:
+                try:
+                    self.diag_signal.emit(txt)
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.diag_signal.emit(txt)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # NOTE: RX parsing from pymodbus Processing lines is intentionally
         # NOT used to emit `tag_polled` directly. We rely on the read result
@@ -368,7 +382,16 @@ class AsyncPoller(QObject):
             try:
                 # emit a concise diagnostic for every tag emission
                 try:
-                    self.diag_signal.emit(f"EMIT_TAG_POLLED: id={id(tag)} val={repr(value)} qual={quality}")
+                    # Throttle per-tag diagnostics to avoid flooding the UI.
+                    # Only emit if last emit was more than `diag_throttle` seconds ago.
+                    diag_throttle = 0.5  # seconds
+                    last = None
+                    try:
+                        last = self._last_emit_times.get(id(tag))
+                    except Exception:
+                        last = None
+                    if last is None or (time.time() - last) >= diag_throttle:
+                        self.diag_signal.emit(f"EMIT_TAG_POLLED: id={id(tag)} val={repr(value)} qual={quality}")
                 except Exception:
                     pass
             except Exception:
@@ -710,10 +733,8 @@ class AsyncPoller(QObject):
 
                 # emit raw stored value for debugging
                 try:
-                    try:
-                        raw_bs = dev.data(7, Qt.ItemDataRole.UserRole)
-                    except Exception:
-                        pass
+                    # placeholder: originally emitted raw bytes for diagnostics; retained as a no-op to preserve structure
+                    pass
                 except Exception:
                     pass
 

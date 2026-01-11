@@ -647,6 +647,60 @@ class ModbusClient:
     async def write_coil_async(self, address: int, value: bool):
         if self._client is None:
             await self.connect_async()
+        # emit synthetic TX for writes when no transport-level trace is installed
+        try:
+            if self.diag_callback and not self._transport_trace_installed():
+                try:
+                    func_byte = 5
+                    addr_b = int(address).to_bytes(2, "big")
+                    val_b = (0xFF00 if bool(value) else 0x0000).to_bytes(2, "big")
+                    pdu_pdu = bytes([func_byte]) + addr_b + val_b
+                    try:
+                        unit_val = int(self.unit) & 0xFF
+                    except Exception:
+                        unit_val = 0
+                    mode_lower = (self.mode or "").lower()
+                    if mode_lower == "tcp":
+                        try:
+                            if hasattr(self, '_client') and hasattr(self._client, '_diag_txid'):
+                                client_tid = (int(getattr(self._client, '_diag_txid', 0)) + 1) & 0xFFFF
+                                self._client._diag_txid = client_tid
+                                self._txid = client_tid
+                            else:
+                                self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        except Exception:
+                            self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        txid_b = int(self._txid).to_bytes(2, 'big')
+                        proto_b = (0).to_bytes(2, 'big')
+                        length_b = (len(pdu_pdu) + 1).to_bytes(2, 'big')
+                        pdu = txid_b + proto_b + length_b + bytes([unit_val]) + pdu_pdu
+                    elif mode_lower in ("rtu", "overtcp"):
+                        adu_no_crc = bytes([unit_val]) + pdu_pdu
+                        try:
+                            crc = 0xFFFF
+                            for b in adu_no_crc:
+                                crc ^= b
+                                for _ in range(8):
+                                    if crc & 1:
+                                        crc = (crc >> 1) ^ 0xA001
+                                    else:
+                                        crc >>= 1
+                            crc &= 0xFFFF
+                            crc_bytes = crc.to_bytes(2, 'little')
+                            pdu = adu_no_crc + crc_bytes
+                        except Exception:
+                            pdu = adu_no_crc
+                    else:
+                        pdu = bytes([unit_val]) + pdu_pdu
+                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
+                    try:
+                        self.diag_callback(f"TX: | {hex_s} |")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         method = getattr(self._client, 'write_coil', None)
         if method is None:
             raise AttributeError('Underlying client missing write_coil')
@@ -670,6 +724,60 @@ class ModbusClient:
     async def write_coils_async(self, address: int, values: list[bool]):
         if self._client is None:
             await self.connect_async()
+        try:
+            if self.diag_callback and not self._transport_trace_installed():
+                try:
+                    func_byte = 15
+                    addr_b = int(address).to_bytes(2, "big")
+                    qty = int(len(values))
+                    coil_bytes = self._bits_to_bytes([bool(v) for v in values])
+                    pdu_pdu = bytes([func_byte]) + addr_b + int(qty).to_bytes(2, 'big') + int(len(coil_bytes)).to_bytes(1, 'big') + coil_bytes
+                    try:
+                        unit_val = int(self.unit) & 0xFF
+                    except Exception:
+                        unit_val = 0
+                    mode_lower = (self.mode or "").lower()
+                    if mode_lower == "tcp":
+                        try:
+                            if hasattr(self, '_client') and hasattr(self._client, '_diag_txid'):
+                                client_tid = (int(getattr(self._client, '_diag_txid', 0)) + 1) & 0xFFFF
+                                self._client._diag_txid = client_tid
+                                self._txid = client_tid
+                            else:
+                                self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        except Exception:
+                            self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        txid_b = int(self._txid).to_bytes(2, 'big')
+                        proto_b = (0).to_bytes(2, 'big')
+                        length_b = (len(pdu_pdu) + 1).to_bytes(2, 'big')
+                        pdu = txid_b + proto_b + length_b + bytes([unit_val]) + pdu_pdu
+                    elif mode_lower in ("rtu", "overtcp"):
+                        adu_no_crc = bytes([unit_val]) + pdu_pdu
+                        try:
+                            crc = 0xFFFF
+                            for b in adu_no_crc:
+                                crc ^= b
+                                for _ in range(8):
+                                    if crc & 1:
+                                        crc = (crc >> 1) ^ 0xA001
+                                    else:
+                                        crc >>= 1
+                            crc &= 0xFFFF
+                            crc_bytes = crc.to_bytes(2, 'little')
+                            pdu = adu_no_crc + crc_bytes
+                        except Exception:
+                            pdu = adu_no_crc
+                    else:
+                        pdu = bytes([unit_val]) + pdu_pdu
+                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
+                    try:
+                        self.diag_callback(f"TX: | {hex_s} |")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         method = getattr(self._client, 'write_coils', None)
         if method is None:
             raise AttributeError('Underlying client missing write_coils')
@@ -693,6 +801,59 @@ class ModbusClient:
     async def write_register_async(self, address: int, value: int):
         if self._client is None:
             await self.connect_async()
+        try:
+            if self.diag_callback and not self._transport_trace_installed():
+                try:
+                    func_byte = 6
+                    addr_b = int(address).to_bytes(2, "big")
+                    val_b = int(value & 0xFFFF).to_bytes(2, 'big')
+                    pdu_pdu = bytes([func_byte]) + addr_b + val_b
+                    try:
+                        unit_val = int(self.unit) & 0xFF
+                    except Exception:
+                        unit_val = 0
+                    mode_lower = (self.mode or "").lower()
+                    if mode_lower == "tcp":
+                        try:
+                            if hasattr(self, '_client') and hasattr(self._client, '_diag_txid'):
+                                client_tid = (int(getattr(self._client, '_diag_txid', 0)) + 1) & 0xFFFF
+                                self._client._diag_txid = client_tid
+                                self._txid = client_tid
+                            else:
+                                self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        except Exception:
+                            self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        txid_b = int(self._txid).to_bytes(2, 'big')
+                        proto_b = (0).to_bytes(2, 'big')
+                        length_b = (len(pdu_pdu) + 1).to_bytes(2, 'big')
+                        pdu = txid_b + proto_b + length_b + bytes([unit_val]) + pdu_pdu
+                    elif mode_lower in ("rtu", "overtcp"):
+                        adu_no_crc = bytes([unit_val]) + pdu_pdu
+                        try:
+                            crc = 0xFFFF
+                            for b in adu_no_crc:
+                                crc ^= b
+                                for _ in range(8):
+                                    if crc & 1:
+                                        crc = (crc >> 1) ^ 0xA001
+                                    else:
+                                        crc >>= 1
+                            crc &= 0xFFFF
+                            crc_bytes = crc.to_bytes(2, 'little')
+                            pdu = adu_no_crc + crc_bytes
+                        except Exception:
+                            pdu = adu_no_crc
+                    else:
+                        pdu = bytes([unit_val]) + pdu_pdu
+                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
+                    try:
+                        self.diag_callback(f"TX: | {hex_s} |")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         method = getattr(self._client, 'write_register', None)
         if method is None:
             raise AttributeError('Underlying client missing write_register')
@@ -716,6 +877,60 @@ class ModbusClient:
     async def write_registers_async(self, address: int, values: list[int]):
         if self._client is None:
             await self.connect_async()
+        try:
+            if self.diag_callback and not self._transport_trace_installed():
+                try:
+                    func_byte = 16
+                    addr_b = int(address).to_bytes(2, "big")
+                    qty = int(len(values))
+                    data_bytes = self._registers_to_bytes(list(values))
+                    pdu_pdu = bytes([func_byte]) + addr_b + int(qty).to_bytes(2, 'big') + int(len(data_bytes)).to_bytes(1, 'big') + data_bytes
+                    try:
+                        unit_val = int(self.unit) & 0xFF
+                    except Exception:
+                        unit_val = 0
+                    mode_lower = (self.mode or "").lower()
+                    if mode_lower == "tcp":
+                        try:
+                            if hasattr(self, '_client') and hasattr(self._client, '_diag_txid'):
+                                client_tid = (int(getattr(self._client, '_diag_txid', 0)) + 1) & 0xFFFF
+                                self._client._diag_txid = client_tid
+                                self._txid = client_tid
+                            else:
+                                self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        except Exception:
+                            self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        txid_b = int(self._txid).to_bytes(2, 'big')
+                        proto_b = (0).to_bytes(2, 'big')
+                        length_b = (len(pdu_pdu) + 1).to_bytes(2, 'big')
+                        pdu = txid_b + proto_b + length_b + bytes([unit_val]) + pdu_pdu
+                    elif mode_lower in ("rtu", "overtcp"):
+                        adu_no_crc = bytes([unit_val]) + pdu_pdu
+                        try:
+                            crc = 0xFFFF
+                            for b in adu_no_crc:
+                                crc ^= b
+                                for _ in range(8):
+                                    if crc & 1:
+                                        crc = (crc >> 1) ^ 0xA001
+                                    else:
+                                        crc >>= 1
+                            crc &= 0xFFFF
+                            crc_bytes = crc.to_bytes(2, 'little')
+                            pdu = adu_no_crc + crc_bytes
+                        except Exception:
+                            pdu = adu_no_crc
+                    else:
+                        pdu = bytes([unit_val]) + pdu_pdu
+                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
+                    try:
+                        self.diag_callback(f"TX: | {hex_s} |")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         method = getattr(self._client, 'write_registers', None)
         if method is None:
             raise AttributeError('Underlying client missing write_registers')
@@ -739,6 +954,60 @@ class ModbusClient:
     async def mask_write_register_async(self, address: int, and_mask: int, or_mask: int):
         if self._client is None:
             await self.connect_async()
+        try:
+            if self.diag_callback and not self._transport_trace_installed():
+                try:
+                    func_byte = 22
+                    addr_b = int(address).to_bytes(2, "big")
+                    and_b = int(and_mask & 0xFFFF).to_bytes(2, 'big')
+                    or_b = int(or_mask & 0xFFFF).to_bytes(2, 'big')
+                    pdu_pdu = bytes([func_byte]) + addr_b + and_b + or_b
+                    try:
+                        unit_val = int(self.unit) & 0xFF
+                    except Exception:
+                        unit_val = 0
+                    mode_lower = (self.mode or "").lower()
+                    if mode_lower == "tcp":
+                        try:
+                            if hasattr(self, '_client') and hasattr(self._client, '_diag_txid'):
+                                client_tid = (int(getattr(self._client, '_diag_txid', 0)) + 1) & 0xFFFF
+                                self._client._diag_txid = client_tid
+                                self._txid = client_tid
+                            else:
+                                self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        except Exception:
+                            self._txid = (getattr(self, '_txid', 0) + 1) & 0xFFFF
+                        txid_b = int(self._txid).to_bytes(2, 'big')
+                        proto_b = (0).to_bytes(2, 'big')
+                        length_b = (len(pdu_pdu) + 1).to_bytes(2, 'big')
+                        pdu = txid_b + proto_b + length_b + bytes([unit_val]) + pdu_pdu
+                    elif mode_lower in ("rtu", "overtcp"):
+                        adu_no_crc = bytes([unit_val]) + pdu_pdu
+                        try:
+                            crc = 0xFFFF
+                            for b in adu_no_crc:
+                                crc ^= b
+                                for _ in range(8):
+                                    if crc & 1:
+                                        crc = (crc >> 1) ^ 0xA001
+                                    else:
+                                        crc >>= 1
+                            crc &= 0xFFFF
+                            crc_bytes = crc.to_bytes(2, 'little')
+                            pdu = adu_no_crc + crc_bytes
+                        except Exception:
+                            pdu = adu_no_crc
+                    else:
+                        pdu = bytes([unit_val]) + pdu_pdu
+                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
+                    try:
+                        self.diag_callback(f"TX: | {hex_s} |")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
         method = getattr(self._client, 'mask_write_register', None)
         if method is None:
             raise AttributeError('Underlying client missing mask_write_register')

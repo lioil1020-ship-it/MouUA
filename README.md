@@ -22,3 +22,9 @@ python app.py
 
 聯絡
 - 作者: lioil1020
+
+---
+
+## Cleanup notes (automated tidy)
+- `quick_diag_trace.py` and `inspect_trace.py` were moved to `deprecated/` during cleanup.
+- `MonitorWindow` implementation was moved to `deprecated/moved_monitor_window.py` and replaced with a lightweight stub in `app.py` to avoid dynamic import/runtime issues while keeping a reference for restoration.

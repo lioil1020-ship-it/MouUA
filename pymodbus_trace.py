@@ -197,22 +197,16 @@ def install_trace_for_client(client, diag_callback: Callable[[str], None]):
                     sid = id(getattr(data, '___dummy', None))
                 except Exception:
                     sid = None
-                try:
-                    # when bound via types.MethodType, `self` is available as first arg in kwargs via closure; fallback to None
-                    pass
-                except Exception:
-                    pass
-                # Do not clear the RX accumulator here; allow parser to
-                # assemble based on protocol framing (MBAP/CRC).
-                try:
-                    # attempt to obtain socket self from bound method via kwargs inspection
-                    sock_self = None
-                    if args:
-                        # when called as sock.send(data), args empty; but when bound, the wrapper is bound to sock via MethodType
+# Do not clear the RX accumulator here; allow parser to
+                    # assemble based on protocol framing (MBAP/CRC).
+                    try:
+                        # attempt to obtain socket self from bound method via kwargs inspection
+                        if args:
+                            # when called as sock.send(data), args empty; but when bound, the wrapper is bound to sock via MethodType
+                            pass
+                        # derive socket id from closure if possible
+                    except Exception:
                         pass
-                    # derive socket id from closure if possible
-                except Exception:
-                    sock_self = None
 
                 try:
                     b = data if isinstance(data, (bytes, bytearray)) else bytes(data)

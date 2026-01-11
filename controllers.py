@@ -200,6 +200,10 @@ class AppController:
         return model
 
     def load_model(self, item):
+        """Return model attached to a tree item.
+
+        Public controller helper - may be used by UI or external code; keep as part of the controller API.
+        """
         # retrieve attached model if exists
         model = item.data(0, Qt.ItemDataRole.UserRole + 1)
         return model

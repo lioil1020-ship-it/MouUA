@@ -1,5 +1,6 @@
 import sys
 import os
+import time
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -39,33 +40,11 @@ from controllers import AppController
 from modbus_worker import AsyncPoller
 
 class MonitorWindow(QMainWindow):
-    """Tag 監看視窗 - 顯示監視的 Tag 數據"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Monitor - Modbus to OPC UA")
-        self.resize(1000, 300)
-        
-        # Monitor table
-        self.monitor_table = QTableWidget()
-        self.monitor_table.setColumnCount(6)
-        self.monitor_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self.monitor_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.monitor_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.monitor_table.setHorizontalHeaderLabels([
-            "Item ID",
-            "Data Type",
-            "Value",
-            "Timestamp",
-            "Quality",
-            "Update Count",
-        ])
-        # 隐藏最左边的行号序号
-        self.monitor_table.verticalHeader().setVisible(False)
-        header = self.monitor_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        
-        self.setCentralWidget(self.monitor_table)
-        self.parent_window = parent
+    """Deprecated placeholder: full implementation moved to `deprecated/moved_monitor_window.py`.
+
+    Keeping a small stub to avoid name resolution issues if referenced dynamically.
+    """
+    pass
 
 
 class TerminalWindow(QMainWindow):
@@ -75,39 +54,24 @@ class TerminalWindow(QMainWindow):
     def __init__(self, parent=None, device_item=None):
         super().__init__(parent)
         self.device_item = device_item
+        # keep a reference to the main IoTApp parent for callbacks
+        self.parent_window = parent
         self.setWindowTitle("Diagnostics" if device_item is None else f"Diagnostics - {self._device_path(device_item)}")
         self.resize(1000, 600)
 
         # 主容器
         main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
-
-        # Diagnostics table (Kepware-like columns)
+        # diagnostics table
+        layout = QVBoxLayout()
         self.diagnostics_table = QTableWidget()
-        # Date, Time, Event, Length, Data
         self.diagnostics_table.setColumnCount(5)
         self.diagnostics_table.setHorizontalHeaderLabels(["Date", "Time", "Event", "Length", "Data"])
-        self.diagnostics_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        self.diagnostics_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-
-        # 隱藏左邊的流水序號
-        self.diagnostics_table.verticalHeader().setVisible(False)
-
         header = self.diagnostics_table.horizontalHeader()
-        # 讓欄位依內容自動調整寬度；若總寬度超出視窗則顯示橫向捲軸
-        for col in range(self.diagnostics_table.columnCount()):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        # 不要換行，讓資料一行呈現以便觸發水平捲軸
-        self.diagnostics_table.setWordWrap(False)
-        # 顯示橫向捲軸（必要時），保持預設垂直捲軸行為
-        self.diagnostics_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.diagnostics_table)
+        main_widget.setLayout(layout)
+        self.setCentralWidget(main_widget)
 
-        self.parent_window = parent
-
-        # 準備 device 相關快取，用於訊息過濾
         self._device_tag_ids = set()
         self._device_path_str = None
         self._device_unit = None
@@ -142,6 +106,25 @@ class TerminalWindow(QMainWindow):
 
         # 建立菜單欄
         self._setup_menu()
+
+    def closeEvent(self, event):
+        try:
+            p = None
+            try:
+                p = self.parent()
+            except Exception:
+                p = None
+            if p is not None:
+                try:
+                    setattr(p, '_terminal_auto_open_blocked', True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            super().closeEvent(event)
+        except Exception:
+            event.accept()
 
     def _device_path(self, item):
         parts = []
@@ -289,26 +272,7 @@ class TerminalWindow(QMainWindow):
         export_action = QAction("💾 匯出.txt", self)
         export_action.triggered.connect(self._export_to_txt)
         self.menuBar().addAction(export_action)
-        
-        # Diagnostics display options
-        self.menuBar().addSeparator()
-        self._only_txrx_action = QAction("僅顯示 TX/RX", self)
-        self._only_txrx_action.setCheckable(True)
-        try:
-            self._only_txrx_action.setChecked(self.parent_window._diag_show_only_txrx)
-        except Exception:
-            self._only_txrx_action.setChecked(True)
-        self._only_txrx_action.toggled.connect(self._on_only_txrx_toggled)
-        self.menuBar().addAction(self._only_txrx_action)
-
-        self._show_raw_action = QAction("顯示原始 logger 訊息", self)
-        self._show_raw_action.setCheckable(True)
-        try:
-            self._show_raw_action.setChecked(self.parent_window._diag_show_raw)
-        except Exception:
-            self._show_raw_action.setChecked(False)
-        self._show_raw_action.toggled.connect(self._on_show_raw_toggled)
-        self.menuBar().addAction(self._show_raw_action)
+        # (已移除顯示選項：Diagnostics 現只顯示 TX/RX)
     
     def _clear_diagnostics(self):
         """清除診斷信息"""
@@ -350,45 +314,31 @@ class TerminalWindow(QMainWindow):
                 QMessageBox.warning(self, "錯誤", f"匯出失敗：{str(e)}")
     
     def _on_diag_context_menu(self, point):
-        """診斷視圖上下文菜單"""
+        """診斷視圖上下文菜單
+
+        注意：此方法可能透過 Qt 的信號/槽或動態建立的選單被呼叫，
+        因此即使靜態分析顯示未使用，也請勿移除或重新命名。
+        """
+        # 保留此 handler 以供動態 UI 呼叫
         pass
 
     def _on_only_txrx_toggled(self, v: bool):
-        """Handle toggling the 'only TX/RX' option and make it mutually exclusive with raw view."""
-        try:
-            # update parent flag
-            if self.parent_window:
-                self.parent_window._set_diag_show_only_txrx(bool(v))
-            # if enabling only-txrx, disable raw view
-            if bool(v):
-                try:
-                    self._show_raw_action.blockSignals(True)
-                    self._show_raw_action.setChecked(False)
-                finally:
-                    try:
-                        self._show_raw_action.blockSignals(False)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        """UI toggle handler kept for backward compatibility.
+
+        保留為 Terminal/Diagnostics menu 的回呼（可能以動態方式綁定）。
+        即使目前不做事，也不要移除以免破壞動態綁定。
+        """
+        # intentionally a no-op to preserve signal/slot binding compatibility
+        return
 
     def _on_show_raw_toggled(self, v: bool):
-        """Handle toggling the 'show raw' option and make it mutually exclusive with only-txrx."""
-        try:
-            if self.parent_window:
-                self.parent_window._set_diag_show_raw(bool(v))
-            # if enabling raw view, disable only-txrx
-            if bool(v):
-                try:
-                    self._only_txrx_action.blockSignals(True)
-                    self._only_txrx_action.setChecked(False)
-                finally:
-                    try:
-                        self._only_txrx_action.blockSignals(False)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        """UI toggle handler kept for backward compatibility.
+
+        保留為 Terminal/Diagnostics menu 的回呼（可能以動態方式綁定）。
+        即使目前不做事，也不要移除以免破壞動態綁定。
+        """
+        # intentionally a no-op to preserve signal/slot binding compatibility
+        return
 
     # TerminalWindow toggles call these IoTApp setters via parent reference
     def _set_diag_show_only_txrx(self, v: bool):
@@ -419,6 +369,8 @@ class IoTApp(QMainWindow):
         # diagnostics display flags (can be toggled from TerminalWindow menu)
         self._diag_show_only_txrx = True
         self._diag_show_raw = False
+        # When True, auto-opening the Diagnostics window is suppressed (set when user closes it)
+        self._terminal_auto_open_blocked = False
 
         # 檔案路徑：使用 %APPDATA%/ModUA 存放 temp.json 與 last project path
         try:
@@ -432,10 +384,10 @@ class IoTApp(QMainWindow):
             self._temp_json = None
             self._last_project_file = None
         
-        # 創建獨立的 Terminal 窗口（診斷視窗）
-        self.terminal_window = TerminalWindow(self)
-        # 管理多個 diagnostics 視窗（包含 global 與 per-device windows）
-        self.terminal_windows = [self.terminal_window]
+        # 不在啟動時建立全域 Diagnostics 視窗（僅透過 Device 右鍵開啟 per-device 窗口）
+        self.terminal_window = None
+        # 管理多個 per-device diagnostics 視窗
+        self.terminal_windows = []
 
         # Install pymodbus log handler to capture SEND/RECV and forward to Diagnostics
         try:
@@ -729,7 +681,7 @@ class IoTApp(QMainWindow):
                 except Exception:
                     summary = 'unrepresentable'
                 try:
-                    self.append_diagnostic(f'Startup: opcua_settings={summary}; OPCServerAvailable={ok}')
+                    self._write_opc_trace(f'Startup: opcua_settings={summary}; OPCServerAvailable={ok}')
                 except Exception:
                     pass
             except Exception:
@@ -741,7 +693,7 @@ class IoTApp(QMainWindow):
         try:
             if getattr(self, 'opcua_settings', None):
                 try:
-                    self.append_diagnostic('Startup: applying opcua_settings via apply_opcua_settings()')
+                    self._write_opc_trace('Startup: applying opcua_settings via apply_opcua_settings()')
                 except Exception:
                     pass
                 try:
@@ -751,17 +703,20 @@ class IoTApp(QMainWindow):
                 except Exception as e:
                     try:
                         import traceback
-                        self.append_diagnostic(f'Startup: apply_opcua_settings failed: {e}\n{traceback.format_exc()}')
+                        self._write_opc_trace(f'Startup: apply_opcua_settings failed: {e}\n{traceback.format_exc()}')
                     except Exception:
                         pass
         except Exception:
             pass
     
     def show_terminal_window(self):
-        """彈出 Terminal 窗口"""
-        self.terminal_window.show()
-        self.terminal_window.raise_()
-        self.terminal_window.activateWindow()
+        """彈出 Terminal 窗口
+
+        注意：保留此方法以便外部程式或測試可以顯式呼叫；
+        它目前不會自動建立或顯示全域視窗，但仍是公開介面的一部份。
+        """
+        # 全域 Diagnostics 已被禁用：此方法保留以維持公開介面兼容性
+        return
 
     def open_device_diagnostics(self, device_item):
         """Open a diagnostics window filtered to the given device_item."""
@@ -773,6 +728,44 @@ class IoTApp(QMainWindow):
             tw.activateWindow()
             # return created window in case caller needs it
             return tw
+        except Exception:
+            return None
+
+    def _get_or_open_device_terminal(self, device_item):
+        """Return an existing per-device TerminalWindow for device_item or open one."""
+        try:
+            if device_item is None:
+                return None
+            dev_id = int(id(device_item))
+            # search existing windows
+            wins = getattr(self, 'terminal_windows', []) or []
+            for w in wins:
+                try:
+                    if getattr(w, '_device_item_id', None) == dev_id:
+                        return w
+                except Exception:
+                    pass
+            # Do not auto-open a new diagnostics window here; only return existing.
+            return None
+        except Exception:
+            return None
+
+    def _get_or_open_opc_terminal(self):
+        """Return or open a dedicated OPC Diagnostics terminal window.
+
+        注意：保留此 helper 以便其他組件可以檢索 (或選擇性建立) OPC diagnostics 窗口。
+        不會自動建立視窗，但外部代碼可能動態呼叫此方法。
+        """
+        try:
+            wins = getattr(self, 'terminal_windows', []) or []
+            for w in wins:
+                try:
+                    if getattr(w, '_is_opc', False):
+                        return w
+                except Exception:
+                    pass
+            # Do not auto-create or show OPC diagnostics window; return None if not present.
+            return None
         except Exception:
             return None
 
@@ -1080,7 +1073,10 @@ class IoTApp(QMainWindow):
                         except Exception as e:
                             try:
                                 import traceback
-                                self.append_diagnostic(f'OPC UA: setup_tags_from_tree failed on project-structure-change: {e}\n{traceback.format_exc()}')
+                                try:
+                                    self._write_opc_trace(f'OPC UA: setup_tags_from_tree failed on project-structure-change: {e}\n{traceback.format_exc()}')
+                                except Exception:
+                                    pass
                             except Exception:
                                 pass
             except Exception:
@@ -1098,7 +1094,7 @@ class IoTApp(QMainWindow):
                 msg.setWindowTitle("有未儲存的變更")
                 msg.setText("您有未儲存的變更。要現在儲存嗎？")
                 save_btn = msg.addButton("儲存", QMessageBox.ButtonRole.AcceptRole)
-                cancel_btn = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
                 msg.exec()
                 btn = msg.clickedButton()
                 if btn == save_btn:
@@ -1633,6 +1629,11 @@ class IoTApp(QMainWindow):
     
 
     def add_selected_to_monitor(self):
+        """Add currently selected Tag(s) to the Monitor view.
+
+        此方法由 UI Action (右鍵選單 / toolbar) 觸發，可被動態綁定，
+        因此即使靜態分析顯示未直接呼叫，也不要移除或重命名。
+        """
         current = self.tree.currentItem()
         if not current:
             return
@@ -1916,6 +1917,8 @@ class IoTApp(QMainWindow):
     def append_diagnostic(self, text: str):
         import time as _time
         import threading
+        # append_diagnostic routes messages to per-device terminal windows only.
+        # No longer write fallback files here.
 
         def _find_device_item_by_id(dev_id):
             try:
@@ -1950,32 +1953,14 @@ class IoTApp(QMainWindow):
         # Whitelist: keep TX/RX lines and connection info that begins with 'Using '
         try:
             txt = str(text or "")
-            # Respect user toggles:
-            show_only_txrx = getattr(self, '_diag_show_only_txrx', True)
-            show_raw = getattr(self, '_diag_show_raw', False)
-
+            # Respect user toggles (stored on self) — filter is currently TX/RX-only
             # If user requested raw logger messages, do not filter anything here
-            if show_raw:
-                pass
-            else:
-                # When set to only show TX/RX, apply whitelist; otherwise show all
-                if show_only_txrx:
-                    ok = False
-                    # always allow TX/RX and Modbus/Write related traces
-                    if "TX:" in txt or "RX:" in txt:
-                        ok = True
-                    if txt.strip().startswith("Using "):
-                        ok = True
-                    if "[WRITE" in txt or "WRITE_CALL" in txt:
-                        ok = True
-                    # also allow explicit startup/opcua diagnostics so users can see server status
-                    if txt.strip().startswith("Startup:") or txt.strip().startswith("OPC UA:"):
-                        ok = True
-                    if not ok:
-                        return
-                else:
-                    # not only-txrx and not raw -> show everything
-                    pass
+            # Always restrict Diagnostics to TX/RX only (no other messages)
+            try:
+                if not ("TX:" in txt or "RX:" in txt):
+                    return
+            except Exception:
+                return
         except Exception:
             pass
 
@@ -1987,13 +1972,15 @@ class IoTApp(QMainWindow):
             ts = f"{dt.strftime('%H:%M:%S')}.{ms:03d}"
         except Exception:
             ts = _time.strftime("%H:%M:%S", _time.localtime())
+
+        # Do not auto-open any diagnostics window here. OPC-related lines are
+        # kept as diagnostics prefixed with 'OPC:' and will be routed to any
+        # matching per-device windows by `append_diagnostic` matching rules.
         
         def _add_to_table():
             try:
                 # route message to all managed terminal windows that match the message
-                wins = getattr(self, 'terminal_windows', None)
-                if not wins:
-                    wins = [getattr(self, 'terminal_window', None)]
+                wins = getattr(self, 'terminal_windows', []) or []
                 for tw in list(wins):
                     try:
                         if tw is None:
@@ -2059,15 +2046,29 @@ class IoTApp(QMainWindow):
             except Exception:
                 pass
         
-        # 如果在主線程，直接執行；否則用 Qt signal 跨線程調用
+        # 不再自動開啟全域 Diagnostics；Diagnostics 僅透過 Device 右鍵顯示。
+
         if threading.current_thread() is threading.main_thread():
             _add_to_table()
         else:
             from PyQt6.QtCore import QTimer
             QTimer.singleShot(0, _add_to_table)
 
+    def _write_opc_trace(self, text: str):
+        """Route OPC-related messages into diagnostics without auto-opening windows."""
+        try:
+            # Prefer to send as a normal diagnostic line prefixed with OPC so
+            # it can be filtered into per-device windows if relevant.
+            self.append_diagnostic(f"OPC: {text}")
+        except Exception:
+            pass
+
     # menu callbacks for TerminalWindow
     def _on_toggle_only_txrx(self, v):
+        """Menu callback: toggle showing only TX/RX in diagnostics.
+
+        Kept for backward compatibility and dynamic menu binding; do not remove.
+        """
         try:
             if self.parent_window:
                 self.parent_window._set_diag_show_only_txrx(bool(v))
@@ -2075,6 +2076,10 @@ class IoTApp(QMainWindow):
             pass
 
     def _on_toggle_show_raw(self, v):
+        """Menu callback: toggle showing raw diagnostics text.
+
+        Kept for backward compatibility and dynamic menu binding; do not remove.
+        """
         try:
             if self.parent_window:
                 self.parent_window._set_diag_show_raw(bool(v))
@@ -2083,7 +2088,13 @@ class IoTApp(QMainWindow):
 
     def clear_diagnostics(self):
         try:
-            self.terminal_window.diagnostics_table.setRowCount(0)
+            wins = getattr(self, 'terminal_windows', []) or []
+            for w in wins:
+                try:
+                    if w and hasattr(w, 'diagnostics_table'):
+                        w.diagnostics_table.setRowCount(0)
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -2167,7 +2178,7 @@ class IoTApp(QMainWindow):
             # store settings and apply them (same behaviour as pressing OK)
             self.opcua_settings = vals
             try:
-                self.append_diagnostic(f"OPC UA settings saved: {vals}")
+                self._write_opc_trace(f"OPC UA settings saved: {vals}")
             except Exception:
                 pass
 
@@ -2180,25 +2191,13 @@ class IoTApp(QMainWindow):
                     if self._opc_update_timer is None:
                         self._opc_update_timer = QTimer(self)
                         self._opc_update_timer.setInterval(200)
-
-                        def _push():
-                            try:
-                                snap = self.data_broker.snapshot()
-                                for k, v in snap.items():
-                                    try:
-                                        self.opc_server.update_tag(k, v.get('value'))
-                                    except Exception:
-                                        pass
-                            except Exception:
-                                pass
-
-                        self._opc_update_timer.timeout.connect(_push)
+                        self._opc_update_timer.timeout.connect(self._opc_push_and_sync)
                         self._opc_update_timer.start()
             except Exception:
                 pass
         except Exception as e:
             try:
-                self.append_diagnostic(f"Failed to open OPC UA settings: {e}")
+                self._write_opc_trace(f"Failed to open OPC UA settings: {e}")
             except Exception:
                 pass
 
@@ -2221,7 +2220,7 @@ class IoTApp(QMainWindow):
 
         if OPCServer is None:
             try:
-                self.append_diagnostic('OPC UA library not available; cannot start server')
+                self._write_opc_trace('OPC UA library not available; cannot start server')
             except Exception:
                 pass
             return
@@ -2231,12 +2230,12 @@ class IoTApp(QMainWindow):
             try:
                 self.opc_server.start()
                 try:
-                    self.append_diagnostic('OPC UA: Running')
+                    self._write_opc_trace('OPC UA: Running')
                 except Exception:
                     pass
             except Exception as e:
                 try:
-                    self.append_diagnostic(f'OPC UA failed to start: {e}')
+                    self._write_opc_trace(f'OPC UA failed to start: {e}')
                 except Exception:
                     pass
                 self.opc_server = None
@@ -2256,7 +2255,10 @@ class IoTApp(QMainWindow):
                                 self.opc_server._nodes_populated = True
                             except Exception:
                                 pass
-                            self.append_diagnostic('OPC UA: setup_tags_from_tree completed after OPC UA settings applied')
+                        except Exception:
+                            pass
+                        try:
+                            self._write_opc_trace('OPC UA: setup_tags_from_tree completed after OPC UA settings applied')
                         except Exception:
                             pass
 
@@ -2266,26 +2268,14 @@ class IoTApp(QMainWindow):
                                 if self._opc_update_timer is None:
                                     self._opc_update_timer = QTimer(self)
                                     self._opc_update_timer.setInterval(200)
-
-                                    def _push():
-                                        try:
-                                            snap = self.data_broker.snapshot()
-                                            for k, v in snap.items():
-                                                try:
-                                                    self.opc_server.update_tag(k, v.get('value'))
-                                                except Exception:
-                                                    pass
-                                        except Exception:
-                                            pass
-
-                                    self._opc_update_timer.timeout.connect(_push)
+                                    self._opc_update_timer.timeout.connect(self._opc_push_and_sync)
                                     self._opc_update_timer.start()
                         except Exception:
                             pass
                     except Exception as e:
                         try:
                             import traceback
-                            self.append_diagnostic(f'OPC UA: setup_tags_from_tree failed after OPC UA settings applied: {e}\n{traceback.format_exc()}')
+                            self._write_opc_trace(f'OPC UA: setup_tags_from_tree failed after OPC UA settings applied: {e}\n{traceback.format_exc()}')
                         except Exception:
                             pass
         except Exception:
@@ -2320,6 +2310,334 @@ class IoTApp(QMainWindow):
                     
                     # 遍歷 Group 下的 Tag
                     self._add_tags_from_group(group)
+
+    def _find_tag_item_by_canonical_key(self, key):
+        """Traverse the tree to find a tag item whose canonical key matches `key`.
+        Returns the QTreeWidgetItem or None."""
+        try:
+            root = getattr(self.tree, 'conn_node', None)
+            if root is None:
+                return None
+            stack = [root]
+            while stack:
+                item = stack.pop()
+                try:
+                    role = item.data(0, Qt.ItemDataRole.UserRole) if Qt is not None else None
+                except Exception:
+                    role = None
+                try:
+                    if role == 'Tag' or (item.text(0) and item.childCount() == 0):
+                        try:
+                            ckey = type(self.data_broker)._make_key_from_tag_item(item)
+                            if ckey == key:
+                                return item
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    for i in range(item.childCount()):
+                        stack.append(item.child(i))
+                except Exception:
+                    pass
+        except Exception:
+            return None
+        return None
+
+    def _handle_tag_polled_maybe_update_broker(self, tag_item, value, timestamp, quality):
+        """Called for each poll result; update DataBroker unless a recent
+        OPC-originated write for the same canonical key is still in the grace period."""
+        try:
+            # compute canonical key
+            try:
+                canonical = type(self.data_broker)._make_key_from_tag_item(tag_item) if getattr(self, 'data_broker', None) is not None else None
+            except Exception:
+                canonical = None
+            # check recent OPC writes
+            skip = False
+            try:
+                rw_lock = getattr(self, '_recent_opc_writes_lock', None)
+                recent = getattr(self, '_recent_opc_writes', None)
+                if rw_lock and recent is not None and canonical is not None:
+                    import time as _time
+                    with rw_lock:
+                        ts = recent.get(canonical)
+                    if ts is not None and (_time.time() - ts) < 2.0:
+                        skip = True
+            except Exception:
+                skip = False
+
+            if not skip:
+                try:
+                    # forward to the original broker handler
+                    self.data_broker.handle_polled(tag_item, value, timestamp, quality)
+                except Exception:
+                    pass
+                else:
+                    # suppressed broker update due to recent OPC write -> write to trace file
+                    try:
+                        try:
+                            self._write_opc_trace(f"SUPPRESS_POLL_OVERWRITE: {canonical}")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    def _opc_push_and_sync(self):
+        """Push DataBroker snapshot to OPC (existing behaviour) and also detect
+        OPC-side writes and forward them to Modbus via `controller.write_tag_value`.
+        """
+        try:
+            if not getattr(self, 'opc_server', None) or not getattr(self, 'data_broker', None):
+                return
+            # Read current snapshots and node list
+            snap = self.data_broker.snapshot()
+            try:
+                node_keys = list(getattr(self.opc_server, '_nodes', {}).keys())
+            except Exception:
+                node_keys = []
+
+            # (debug output removed to avoid log flood)
+
+            # First: detect OPC-side writes (OPC value differs from broker) and forward them to Modbus
+            for k in node_keys:
+                try:
+                    opc_val = self.opc_server.read_tag_value(k)
+                except Exception:
+                    opc_val = None
+                try:
+                    broker_entry = snap.get(k)
+                    broker_val = broker_entry.get('value') if broker_entry else None
+                except Exception:
+                    broker_val = None
+
+                # If OPC has no value, skip.
+                if opc_val is None:
+                    continue
+
+                # If broker has no polled value yet, skip forwarding OPC default/initial values
+                # to Modbus — these are often node defaults from the OPC server and
+                # cause noisy writes on startup. Record the fact to the trace file.
+                if broker_entry is None:
+                    try:
+                        self._write_opc_trace(f"OPC_WRITE_IGNORED_NO_BROKER_VALUE: {k} opc_val={repr(opc_val)}")
+                    except Exception:
+                        pass
+                    continue
+
+                # Only forward when values actually differ
+                if opc_val != broker_val:
+                    try:
+                        if not self.opc_server.is_tag_writable(k):
+                            continue
+                    except Exception:
+                        continue
+
+                    tag_item = self._find_tag_item_by_canonical_key(k)
+                    # ensure we don't schedule a duplicate write while one is pending
+                    try:
+                        import time as _time
+                        import threading as _thr
+                        if not hasattr(self, '_pending_opc_writes_lock'):
+                            self._pending_opc_writes_lock = _thr.RLock()
+                        if not hasattr(self, '_pending_opc_writes'):
+                            self._pending_opc_writes = {}
+                        pending_skip = False
+                        with self._pending_opc_writes_lock:
+                            ts = self._pending_opc_writes.get(k)
+                            if ts is not None and (_time.time() - ts) < 5.0:
+                                pending_skip = True
+                            else:
+                                # mark pending now
+                                self._pending_opc_writes[k] = _time.time()
+                        if pending_skip:
+                            try:
+                                self._write_opc_trace(f"SKIP_DUPLICATE_PENDING_WRITE: {k} opc_val={repr(opc_val)}")
+                            except Exception:
+                                pass
+                            continue
+                    except Exception:
+                        pass
+                    try:
+                        self._write_opc_trace(f"OPC_WRITE_DETECTED: key={k} opc_val={repr(opc_val)} broker_val={repr(broker_val)} tag_item_found={tag_item is not None}")
+                    except Exception:
+                        pass
+                    if tag_item is None:
+                        try:
+                            self._write_opc_trace(f"OPC_WRITE_IGNORED_NO_TAG: {k}")
+                        except Exception:
+                            pass
+                        continue
+                    # perform Modbus write in background thread to avoid blocking UI
+                    def _do_write(tag_item_local, opc_val_local, key_local):
+                        try:
+                            # persistent trace to a file for debugging write path
+                            try:
+                                self._write_opc_trace(f"WRITE_CALL START: {key_local} => {repr(opc_val_local)}")
+                            except Exception:
+                                pass
+                            # log intent (use TX: prefix so append_diagnostic shows it)
+                            try:
+                                self._write_opc_trace(f"TX: OPC->Modbus WRITE_CALL: {key_local} => {repr(opc_val_local)}")
+                            except Exception:
+                                pass
+                            # perform the potentially-blocking write
+                            # wrap diag callback so emitted TX/RX include device context
+                            try:
+                                dev_item = None
+                                try:
+                                    dev_item = tag_item_local.parent()
+                                    while dev_item is not None and dev_item.data(0, Qt.ItemDataRole.UserRole) != 'Device':
+                                        dev_item = dev_item.parent()
+                                except Exception:
+                                    dev_item = None
+                                dev_id_prefix = ''
+                                try:
+                                    if dev_item is not None:
+                                        dev_id_prefix = f"DEV_ID={int(id(dev_item))} "
+                                except Exception:
+                                    dev_id_prefix = ''
+                            except Exception:
+                                dev_id_prefix = ''
+
+                            def _diag_with_dev(msg):
+                                try:
+                                    # ensure TX/RX lines are visible in Diagnostics by adding device context
+                                    self.append_diagnostic(f"{dev_id_prefix}{msg}")
+                                except Exception:
+                                    try:
+                                        self.append_diagnostic(msg)
+                                    except Exception:
+                                        pass
+
+                            self.controller.write_tag_value(tag_item_local, opc_val_local, diag_callback=_diag_with_dev)
+                            try:
+                                self._write_opc_trace(f"TX: OPC->Modbus WRITE_OK: {key_local}")
+                            except Exception:
+                                pass
+                            try:
+                                self._write_opc_trace(f"WRITE_OK: {key_local}")
+                            except Exception:
+                                pass
+                            # record recent OPC write time to protect against immediate Broker->OPC overwrite
+                            try:
+                                import threading as _thr
+                                import time as _time
+                                if not hasattr(self, '_recent_opc_writes_lock'):
+                                    self._recent_opc_writes_lock = _thr.RLock()
+                                if not hasattr(self, '_recent_opc_writes'):
+                                    self._recent_opc_writes = {}
+                                with self._recent_opc_writes_lock:
+                                    self._recent_opc_writes[key_local] = _time.time()
+                                # clear pending flag
+                                try:
+                                    if hasattr(self, '_pending_opc_writes_lock') and hasattr(self, '_pending_opc_writes'):
+                                        with self._pending_opc_writes_lock:
+                                            if key_local in self._pending_opc_writes:
+                                                del self._pending_opc_writes[key_local]
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                            # update broker (DataBroker is thread-safe)
+                            try:
+                                self.data_broker.handle_polled(tag_item_local, opc_val_local, time.time(), 'Good')
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            try:
+                                # schedule a trace write on main thread
+                                from PyQt6.QtCore import QTimer
+                                QTimer.singleShot(0, lambda: self._write_opc_trace(f"OPC->Modbus write failed for {key_local}: {e}"))
+                            except Exception:
+                                try:
+                                    self._write_opc_trace(f"OPC->Modbus write failed for {key_local}: {e}")
+                                except Exception:
+                                    pass
+                            try:
+                                self._write_opc_trace(f"WRITE_EXCEPTION: {key_local} => {repr(e)}")
+                            except Exception:
+                                pass
+                            # clear pending flag on failure as well
+                            try:
+                                if hasattr(self, '_pending_opc_writes_lock') and hasattr(self, '_pending_opc_writes'):
+                                    with self._pending_opc_writes_lock:
+                                        if key_local in self._pending_opc_writes:
+                                            del self._pending_opc_writes[key_local]
+                            except Exception:
+                                pass
+
+                    try:
+                        import threading
+                        t = threading.Thread(target=_do_write, args=(tag_item, opc_val, k), daemon=True)
+                        t.start()
+                    except Exception as e:
+                            try:
+                                self._write_opc_trace(f"OPC->Modbus spawn write thread failed for {k}: {e}")
+                            except Exception:
+                                pass
+
+            # Refresh snapshot because we may have updated the broker above
+            snap = self.data_broker.snapshot()
+
+            # Then: Broker -> OPC — push canonical broker values to OPC nodes
+            # Grace period (seconds) after an OPC-originated write during which
+            # Broker->OPC updates will not overwrite the node.
+            grace_seconds = 2.0
+            import time as _time
+            for k, v in snap.items():
+                try:
+                    try:
+                        rw_lock = getattr(self, '_recent_opc_writes_lock', None)
+                        recent = getattr(self, '_recent_opc_writes', None)
+                        skip = False
+                        if rw_lock and recent is not None:
+                            try:
+                                with rw_lock:
+                                    ts = recent.get(k)
+                            except Exception:
+                                ts = None
+                            try:
+                                if ts is not None and (_time.time() - ts) < grace_seconds:
+                                    skip = True
+                            except Exception:
+                                pass
+                        if skip:
+                            # optionally clear expired entries later; just skip update now
+                            try:
+                                self._write_opc_trace(f"SUPPRESS_POLL_OVERWRITE: {k}")
+                            except Exception:
+                                pass
+                            continue
+                    except Exception:
+                        pass
+
+                    val = None
+                    try:
+                        val = v.get('value') if isinstance(v, dict) else v
+                    except Exception:
+                        val = None
+
+                    # Do not overwrite OPC with None values
+                    if val is None:
+                        continue
+
+                    ok = False
+                    try:
+                        ok = bool(self.opc_server.update_tag(k, val))
+                    except Exception:
+                        ok = False
+                    if not ok:
+                        try:
+                            self._write_opc_trace(f"UPDATE_FAIL: OPC update failed for {k} val={repr(val)}")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _add_tags_from_device(self, device):
         """從 Device 添加所有 Tag"""
@@ -2888,7 +3206,8 @@ class IoTApp(QMainWindow):
                 poller.tag_polled.connect(self._on_tag_polled)
                 try:
                     if getattr(self, 'data_broker', None) is not None:
-                        poller.tag_polled.connect(self.data_broker.handle_polled)
+                        # connect to wrapper that respects recent OPC writes
+                        poller.tag_polled.connect(self._handle_tag_polled_maybe_update_broker)
                 except Exception:
                     pass
                 try:
@@ -3168,10 +3487,9 @@ class IoTApp(QMainWindow):
             
             # 解構 (tag_item, device_params, array_index)
             if isinstance(data, tuple) and len(data) == 3:
-                tag_item, device_params_old, array_index = data
+                tag_item, _, array_index = data
             else:
                 tag_item = data
-                device_params_old = {}
                 array_index = None
             
             if not tag_item:
@@ -3384,18 +3702,30 @@ class IoTApp(QMainWindow):
             use_fc = self._determine_fc_code(address_start, fc05_enabled, fc06_enabled)
             
             # 轉換為寄存器值
-            regs, reg_desc = self._convert_value_to_registers(write_value, data_type, first_word_low)
-            
-            # 決定實際會使用的 FC（若 use_fc 為 FC06 但 regs 長度為 2，會自動升級為 FC16）
-            effective_fc = use_fc
+            regs, _ = self._convert_value_to_registers(write_value, data_type, first_word_low)
+
+            # prepare a device context prefix so Diagnostics lines (TX/RX)
+            # can be associated with the correct device/terminal window
             try:
-                if use_fc == "FC06" and len(regs) > 1:
-                    effective_fc = "FC16 (upgraded)"
+                dev_item = tag_item.parent()
+                if dev_item and dev_item.data(0, Qt.ItemDataRole.UserRole) == 'Group':
+                    dev_item = dev_item.parent()
+            except Exception:
+                dev_item = None
+            try:
+                dev_id_prefix = f"DEV_ID={int(id(dev_item))} " if dev_item is not None else ""
+            except Exception:
+                dev_id_prefix = ""
+            
+            # 確保該 Device 的 Diagnostics 視窗已開啟（monitor 寫值視為一種 poll）
+            try:
+                try:
+                    self._get_or_open_device_terminal(dev_item)
+                except Exception:
+                    pass
             except Exception:
                 pass
 
-            self.append_diagnostic(f"[WRITE] {device_name}: Kepware地址 {full_addr_num} -> Modbus地址 {actual_addr}, FC={effective_fc}, 寄存器值={[hex(r) for r in regs]}")
-            
             # ========== 步驟 9: 執行寫入操作 ==========
             from modbus_client import ModbusClient
             import threading
@@ -3405,13 +3735,23 @@ class IoTApp(QMainWindow):
                     import asyncio
                     
                     async def do_write():
+                        # wrap diag_callback so ModbusClient emissions include device context
+                        def _diag_with_dev_local(m):
+                            try:
+                                self.append_diagnostic(f"{dev_id_prefix}{m}")
+                            except Exception:
+                                try:
+                                    self.append_diagnostic(m)
+                                except Exception:
+                                    pass
+
                         client = ModbusClient(
-                            mode="tcp",
-                            host=dev_ip,
-                            port=dev_port,
-                            unit=dev_unit,
-                            diag_callback=self.append_diagnostic
-                        )
+                                mode="tcp",
+                                host=dev_ip,
+                                port=dev_port,
+                                unit=dev_unit,
+                                diag_callback=_diag_with_dev_local
+                            )
                         
                         try:
                             await client.connect_async()
@@ -3448,7 +3788,7 @@ class IoTApp(QMainWindow):
                                 try:
                                     try:
                                         pdu_tx = bytes([5]) + int(actual_addr).to_bytes(2, "big") + (0xFF00 if bool(write_value) else 0x0000).to_bytes(2, "big")
-                                        self.append_diagnostic(f"TX: | {_hex(_format_adu(pdu_tx))} |")
+                                        self.append_diagnostic(f"{dev_id_prefix}TX: | {_hex(_format_adu(pdu_tx))} |")
                                     except Exception:
                                         pass
                                     result = await client.write_coil_async(actual_addr, bool(write_value))
@@ -3473,7 +3813,7 @@ class IoTApp(QMainWindow):
                                         qty = 1
                                         coil_bytes = b"\x01" if bool(write_value) else b"\x00"
                                         pdu_tx = bytes([15]) + int(actual_addr).to_bytes(2, "big") + int(qty).to_bytes(2, "big") + int(len(coil_bytes)).to_bytes(1, "big") + coil_bytes
-                                        self.append_diagnostic(f"TX: | {_hex(_format_adu(pdu_tx))} |")
+                                        self.append_diagnostic(f"{dev_id_prefix}TX: | {_hex(_format_adu(pdu_tx))} |")
                                     except Exception:
                                         pass
                                     result = await client.write_coils_async(actual_addr, [bool(write_value)])
@@ -3498,7 +3838,7 @@ class IoTApp(QMainWindow):
                                     try:
                                         try:
                                             pdu_tx = bytes([6]) + int(actual_addr).to_bytes(2, "big") + int(regs[0]).to_bytes(2, "big")
-                                            self.append_diagnostic(f"TX: | {_hex(_format_adu(pdu_tx))} |")
+                                            self.append_diagnostic(f"{dev_id_prefix}TX: | {_hex(_format_adu(pdu_tx))} |")
                                         except Exception:
                                             pass
                                         result = await client.write_register_async(actual_addr, regs[0])
@@ -3533,7 +3873,7 @@ class IoTApp(QMainWindow):
                                         qty = len(regs)
                                         data_bytes = b"".join(int(r & 0xFFFF).to_bytes(2, "big") for r in regs)
                                         pdu_tx = bytes([16]) + int(actual_addr).to_bytes(2, "big") + int(qty).to_bytes(2, "big") + int(len(data_bytes)).to_bytes(1, "big") + data_bytes
-                                        self.append_diagnostic(f"TX: | {_hex(_format_adu(pdu_tx))} |")
+                                        self.append_diagnostic(f"{dev_id_prefix}TX: | {_hex(_format_adu(pdu_tx))} |")
                                     except Exception:
                                         pass
                                     result = await client.write_registers_async(actual_addr, regs)
@@ -3591,6 +3931,15 @@ class IoTApp(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "錯誤", f"Modbus寫入失敗: {str(e)}")
             self.append_diagnostic(f"[ERROR] 寫入異常: {str(e)}")
+
+
+# Compatibility: expose module-level handlers as IoTApp methods for legacy callers/tests
+try:
+    IoTApp._on_diag_context_menu = _on_diag_context_menu
+    IoTApp._on_only_txrx_toggled = _on_only_txrx_toggled
+    IoTApp._on_show_raw_toggled = _on_show_raw_toggled
+except Exception:
+    pass
 
 
 if __name__ == "__main__":

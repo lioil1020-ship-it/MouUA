@@ -68,7 +68,10 @@ class ConnectivityTree(QTreeWidget):
             self.request_edit_item.emit(item)
 
     def contextMenuEvent(self, event):
-        """處理右鍵選單邏輯"""
+        """處理右鍵選單邏輯
+
+        Qt override - this method is invoked by the framework; keep it even if static analysis flags it.
+        """
         item = self.itemAt(event.pos())
         if not item: return
 
