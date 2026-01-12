@@ -55,14 +55,7 @@ class OPCUADialog(QDialog):
         self._adapter_ip_hidden = QLineEdit()
         self._adapter_ip_hidden.setVisible(False)
         self.settings_form.fields['network_adapter_ip'] = self._adapter_ip_hidden
-        # Auto-start checkbox (do not use FormBuilder because it doesn't support checkboxes)
-        from PyQt6.QtWidgets import QCheckBox
-        self.auto_start_checkbox = QCheckBox('Auto Start OPC UA Server on application startup')
-        try:
-            self.auto_start_checkbox.setChecked(False)
-        except Exception:
-            pass
-        self.settings_form.layout.addRow('', self.auto_start_checkbox)
+        # 已移除「Auto Start OPC UA Server on application startup」選項
         self.settings_form.add_field('max_sessions', 'Max Sessions')
         self.settings_form.add_field('publish_interval', 'Publish Interval (ms)')
         
@@ -354,7 +347,6 @@ class OPCUADialog(QDialog):
             'cert_validity': '20',
             # 其他預設
             'max_sessions': '4096', 'publish_interval': '1000'
-            , 'auto_start': False
         }
         self.set_values(defaults)
         if initial: self.set_values(initial)
@@ -380,10 +372,6 @@ class OPCUADialog(QDialog):
         for k, cb in self.sec_checkboxes.items():
             out[k] = cb.isChecked()
         out['auto_generate'] = self.auto_generate.isChecked()
-        try:
-            out['auto_start'] = bool(self.auto_start_checkbox.isChecked())
-        except Exception:
-            out['auto_start'] = False
         if hasattr(self, 'endpoint_display'):
             out['product_uri'] = self.endpoint_display.text()
         return out
