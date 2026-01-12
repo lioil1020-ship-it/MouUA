@@ -5,6 +5,7 @@ import asyncio
 import threading
 import math
 import uuid
+import logging
 
 # Global bus lock registry to serialize requests per physical/logical connection
 # Keying: ('serial', serial_port) or ('tcp', host, port)
@@ -283,13 +284,14 @@ class AsyncPoller(QObject):
     tag_polled = pyqtSignal(object, object, float, str)
     diag_signal = pyqtSignal(str)
 
-    def __init__(self, controller, host="127.0.0.1", port=502, unit=1, interval=1.0):
+    def __init__(self, controller, host="127.0.0.1", port=502, unit=1, interval=1.0, diag_callback=None):
         super().__init__()
         self.controller = controller
         self.host = host
         self.port = port
         self.unit = unit
         self.interval = float(interval)
+        self._diag_callback = diag_callback
         self._running = False
         self._tags = []
         self._task = None
@@ -324,13 +326,14 @@ class AsyncPoller(QObject):
     def set_interval(self, interval_seconds):
         self.interval = float(interval_seconds)
 
-    def _emit_diag(self, text):
+    def _emit_diag(self, text, context=None):
         # Centralized filtering: only emit diagnostic lines that are useful
         # for the UI/raw log to avoid flooding (e.g. TX/RX frames, write ops,
         # and limited poll emissions). Suppress verbose internal traces.
         try:
             txt = str(text or "")
-            allowed_keywords = ("TX:", "RX:", "OPC->", "WRITE_CALL", "WRITE_OK", "WRITE_FAILED", "WRITE_DENIED", "EMIT_TAG_POLLED")
+            # Only allow wire-level TX/RX through the poller diagnostics
+            allowed_keywords = ("TX:", "RX:")
             emit_allowed = any(k in txt for k in allowed_keywords)
         except Exception:
             emit_allowed = False
@@ -338,21 +341,21 @@ class AsyncPoller(QObject):
         if not emit_allowed:
             return
 
-        # If we are running in the main asyncio loop (i.e. same thread as Qt),
-        # emitting signals directly is fine. Otherwise post to Qt main thread.
         try:
-            if self._in_main_loop:
+            if self._diag_callback:
                 try:
-                    self.diag_signal.emit(txt)
-                except Exception:
-                    pass
-            else:
-                try:
-                    self.diag_signal.emit(txt)
-                except Exception:
-                    pass
+                    self._diag_callback(txt, context)
+                except TypeError:
+                    self._diag_callback(txt)
+                return
         except Exception:
-            pass
+            logging.exception("diag_callback failed")
+
+        # If no external callback, emit Qt signal (Qt will queue cross-thread)
+        try:
+            self.diag_signal.emit(txt)
+        except Exception:
+            logging.exception("diag_signal emit failed")
 
         # NOTE: RX parsing from pymodbus Processing lines is intentionally
         # NOT used to emit `tag_polled` directly. We rely on the read result
@@ -381,18 +384,7 @@ class AsyncPoller(QObject):
         try:
             try:
                 # emit a concise diagnostic for every tag emission
-                try:
-                    # Throttle per-tag diagnostics to avoid flooding the UI.
-                    # Only emit if last emit was more than `diag_throttle` seconds ago.
-                    diag_throttle = 0.5  # seconds
-                    last = None
-                    try:
-                        last = self._last_emit_times.get(id(tag))
-                    except Exception:
-                        last = None
-                    if last is None or (time.time() - last) >= diag_throttle:
-                        self.diag_signal.emit(f"EMIT_TAG_POLLED: id={id(tag)} val={repr(value)} qual={quality}")
-                except Exception:
+                    # Removed per-tag EMIT_TAG_POLLED diagnostics to reduce noise.
                     pass
             except Exception:
                 pass
@@ -410,10 +402,7 @@ class AsyncPoller(QObject):
             # per-iteration diagnostics suppressed to avoid noise
             start = time.time()
             tags_snapshot = list(self._tags)
-            try:
-                self._emit_diag(f"LOOP_TAG_COUNT: {len(tags_snapshot)}")
-            except Exception:
-                pass
+            # suppressed loop-level diagnostics to avoid noise
             # Build per-tag metadata (offset/count/fc) so we can group and merge reads
             tag_infos = []
             import re
@@ -655,7 +644,7 @@ class AsyncPoller(QObject):
                 try:
                     self._emit_diag(f"PROCESS_GROUP: host={host} port={port} unit={unit} fc={fc} dev_id={dev_id} members={len(items)}")
                 except Exception:
-                    pass
+                    logging.exception("process_group diag failed")
                 # sort by offset
                 items.sort(key=lambda x: x[0])
 
@@ -975,8 +964,16 @@ class AsyncPoller(QObject):
                                 port=port,
                             )
 
+                            # 確保輪詢時一定會產生 TX/RX 診斷（即便底層 trace 已安裝）
                             try:
-                                self._emit_diag(f"POLL_CALL: mode={client_mode_local} host={host_local} port={port_local} unit={unit} addr={fake_addr}")
+                                client_params_local = dict(client_params_local or {})
+                                client_params_local['emit_synthetic_tx'] = True
+                                client_params_local['force_diag_emit'] = True
+                            except Exception:
+                                pass
+
+                            try:
+                                self._emit_diag(f"POLL_CALL: mode={client_mode_local} host={host_local} port={port_local} unit={unit} addr={fake_addr}", context=base_ctx)
                             except Exception:
                                 pass
                             try:
@@ -986,7 +983,31 @@ class AsyncPoller(QObject):
                                     dev_id_ctx = id(dev) if dev is not None else 0
                                 except Exception:
                                     dev_id_ctx = 0
-                                prefix = f"DEV_ID={dev_id_ctx} HOST={host_local} PORT={port_local} "
+                                # build device path string for more robust matching in UI
+                                try:
+                                    device_path_parts = []
+                                    it = dev
+                                    while it is not None and it.data(0, Qt.ItemDataRole.UserRole) != "Connectivity":
+                                        try:
+                                            device_path_parts.insert(0, it.text(0))
+                                        except Exception:
+                                            pass
+                                        try:
+                                            it = it.parent()
+                                        except Exception:
+                                            it = None
+                                    device_path = ".".join(device_path_parts) if device_path_parts else None
+                                except Exception:
+                                    device_path = None
+                                try:
+                                    device_name = dev.text(0) if dev is not None else None
+                                except Exception:
+                                    device_name = None
+
+                                # include path/name in prefix so textual replay/matching can find the device
+                                path_part = f" PATH={device_path}" if device_path else ""
+                                name_part = f" NAME={device_name}" if device_name else ""
+                                prefix = f"DEV_ID={dev_id_ctx} HOST={host_local} PORT={port_local} UNIT={unit} FC={fc}{path_part}{name_part} "
                                 # assign an operation id so we can correlate logs for a single controller read
                                 try:
                                     op_id = uuid.uuid4().hex[:8]
@@ -994,26 +1015,36 @@ class AsyncPoller(QObject):
                                     op_id = str(time.time())
                                 poller_key = getattr(self, '__conn_key__', id(self))
                                 prefix2 = f"OP={op_id} POLLER={poller_key} {prefix}"
+                                base_ctx = {
+                                    "dev_id": dev_id_ctx,
+                                    "host": host_local,
+                                    "port": port_local,
+                                    "unit": unit,
+                                    "fc": fc,
+                                    "device_path": device_path,
+                                    "device_name": device_name,
+                                }
+
                                 def _diag_with_ctx(msg):
                                     try:
-                                        self._emit_diag(prefix2 + str(msg))
+                                        self._emit_diag(prefix2 + str(msg), context=base_ctx)
                                     except Exception:
                                         try:
-                                            self._emit_diag(str(msg))
+                                            self._emit_diag(str(msg), context=base_ctx)
                                         except Exception:
                                             pass
 
                                 # serialize requests on the same physical/logical bus
-                                try:
-                                    self._emit_diag(f"BUS_LOCK_LOOKUP: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
-                                except Exception:
-                                    pass
+                                    try:
+                                        self._emit_diag(f"BUS_LOCK_LOOKUP: HOST={host_local} PORT={port_local} MODE={client_mode_local}", context=base_ctx)
+                                    except Exception:
+                                        pass
                                 lock = get_bus_lock(host=host_local, port=port_local, client_params=client_params_local, client_mode=client_mode_local)
                                 async with lock:
                                     try:
-                                        self._emit_diag(f"BUS_LOCK_ACQUIRED: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                        self._emit_diag(f"BUS_LOCK_ACQUIRED: HOST={host_local} PORT={port_local} MODE={client_mode_local}", context=base_ctx)
                                     except Exception:
-                                        pass
+                                        logging.exception("bus lock acquire diag failed")
                                     res = await self.controller.read_tag_value_async(
                                         fake_tag,
                                         host=host_local,
@@ -1027,14 +1058,15 @@ class AsyncPoller(QObject):
                                         inter_request_delay=inter_delay_local,
                                         )
                                     try:
-                                        self._emit_diag(f"BUS_LOCK_RELEASE: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                        self._emit_diag(f"BUS_LOCK_RELEASE: HOST={host_local} PORT={port_local} MODE={client_mode_local}", context=base_ctx)
                                     except Exception:
-                                        pass
-                            except Exception as e:
+                                        logging.exception("bus lock release diag failed")
+                            except Exception:
+                                logging.exception("poll call exception")
                                 try:
                                     import traceback
                                     tb = traceback.format_exc()
-                                    self._emit_diag(f"POLL_CALL_EXCEPTION: addr={fake_addr} exc={tb}")
+                                    self._emit_diag(f"POLL_CALL_EXCEPTION: addr={fake_addr} exc={tb}", context=base_ctx)
                                 except Exception:
                                     pass
                                 raise
@@ -1044,7 +1076,7 @@ class AsyncPoller(QObject):
                                     ts = time.time()
                                     self._emit_tag_polled(tag_item, None, ts, "Bad")
                             except Exception:
-                                pass
+                                logging.exception("emit_tag_polled fallback failed")
                             continue
 
                         # obtain normalized bytes for this response
@@ -1091,7 +1123,10 @@ class AsyncPoller(QObject):
                                 exp_len = int(ccount) * 2
                             except Exception:
                                 exp_len = None
-                            self._emit_diag(f"DECODE_CHUNK: addr={fake_addr} fc={fc} chunk_start={cstart} chunk_count={ccount} expected_bytes={exp_len} got_bytes={len(db)} regs_len={len(regs)} regs={list(regs) if hasattr(regs, '__iter__') else regs}")
+                                self._emit_diag(
+                                    f"DECODE_CHUNK: addr={fake_addr} fc={fc} chunk_start={cstart} chunk_count={ccount} expected_bytes={exp_len} got_bytes={len(db)} regs_len={len(regs)} regs={list(regs) if hasattr(regs, '__iter__') else regs}",
+                                    context=base_ctx,
+                                )
                         except Exception:
                             pass
 
@@ -1141,7 +1176,7 @@ class AsyncPoller(QObject):
                                 # If this member's bytes are missing or incomplete in the chunk, try a single-tag read fallback
                                 if need_fallback:
                                     try:
-                                        self._emit_diag(f"CHUNK_MISS_FALLBACK: member_addr={tag_item.data(1, Qt.ItemDataRole.UserRole)} chunk_start={cstart} chunk_count={ccount}")
+                                        self._emit_diag(f"CHUNK_MISS_FALLBACK: member_addr={tag_item.data(1, Qt.ItemDataRole.UserRole)} chunk_start={cstart} chunk_count={ccount}", context=base_ctx)
                                     except Exception:
                                         pass
                                     # perform single-tag read using same client mapping
@@ -1159,21 +1194,21 @@ class AsyncPoller(QObject):
                                         prefix_single = f"OP={op_id2} POLLER={poller_key2} {prefix}"
                                         def _diag_single_with_ctx(msg):
                                             try:
-                                                self._emit_diag(prefix_single + str(msg))
+                                                self._emit_diag(prefix_single + str(msg), context=base_ctx)
                                             except Exception:
                                                 try:
-                                                    self._emit_diag(str(msg))
+                                                    self._emit_diag(str(msg), context=base_ctx)
                                                 except Exception:
                                                     pass
 
                                         try:
-                                            self._emit_diag(f"BUS_LOCK_LOOKUP_SINGLE: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                            self._emit_diag(f"BUS_LOCK_LOOKUP_SINGLE: HOST={host_local} PORT={port_local} MODE={client_mode_local}", context=base_ctx)
                                         except Exception:
                                             pass
                                         lock_single = get_bus_lock(host=host_local, port=port_local, client_params=client_params_local, client_mode=client_mode_local)
                                         async with lock_single:
                                             try:
-                                                self._emit_diag(f"BUS_LOCK_ACQUIRED_SINGLE: HOST={host_local} PORT={port_local} MODE={client_mode_local}")
+                                                self._emit_diag(f"BUS_LOCK_ACQUIRED_SINGLE: HOST={host_local} PORT={port_local} MODE={client_mode_local}", context=base_ctx)
                                             except Exception:
                                                 pass
                                             single_res = await self.controller.read_tag_value_async(

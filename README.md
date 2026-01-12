@@ -28,3 +28,8 @@ python app.py
 ## Cleanup notes (automated tidy)
 - `quick_diag_trace.py` and `inspect_trace.py` were moved to `deprecated/` during cleanup.
 - `MonitorWindow` implementation was moved to `deprecated/moved_monitor_window.py` and replaced with a lightweight stub in `app.py` to avoid dynamic import/runtime issues while keeping a reference for restoration.
+
+## Diagnostics and tests
+- Diagnostics are centralized through `core/diagnostics.py`. UI windows register as listeners and you can export buffered records via the menu or `DiagnosticsManager.export_to_txt`.
+- Sync Modbus client helpers now block when an asyncio loop is already running; prefer the async methods inside event loops.
+- New tests cover diagnostics buffering and representative decode paths. Run `python -m pytest` from the repository root.

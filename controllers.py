@@ -953,6 +953,14 @@ class AppController:
         """
         import asyncio
 
+        # prevent unsafe asyncio.run inside a running loop
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("read_tag_value cannot be called while an event loop is running; use read_tag_value_async instead.")
+
         return asyncio.run(self.read_tag_value_async(tag_item, host=host, port=port, unit=unit, timeout=timeout, connect_timeout=connect_timeout, client_mode=client_mode, client_params=client_params, diag_callback=diag_callback))
 
     async def read_tag_value_async(self, tag_item, host: str = None, port: int = 502, unit: int = 1, timeout: float = 3.0, connect_timeout: float | None = None, client_mode: str = "tcp", client_params: dict | None = None, diag_callback=None, inter_request_delay: float | None = None):
@@ -1258,18 +1266,24 @@ class AppController:
             diag_callback=diag_callback,
             **(client_params or {}),
         )
-        # Emit a concise mapping diagnostic so the UI shows how a Kepware
-        # address was translated to a Modbus offset/count/function code.
+        # Emit concise mapping/connection diagnostics with context so UI can filter per device
         try:
+            base_ctx = {
+                "host": host,
+                "port": port,
+                "unit": unit,
+                "fc": fc,
+            }
+
             if diag_callback:
                 try:
-                    diag_callback(f"MAPPING: addr={addr_raw} -> offset={offset} count={count} fc={fc} per_elem_regs={per_elem_regs} base_dtype={base_dtype} array_len={array_len} zero_based={zero_based} zero_based_bit={zero_based_bit}")
+                    diag_callback(f"MAPPING: addr={addr_raw} -> offset={offset} count={count} fc={fc} per_elem_regs={per_elem_regs} base_dtype={base_dtype} array_len={array_len} zero_based={zero_based} zero_based_bit={zero_based_bit}", base_ctx)
                 except Exception:
                     pass
 
             if diag_callback:
                 try:
-                    diag_callback(f"CLIENT_INIT: client_obj={hex(id(client))} mode={client_mode} host={host} port={port}")
+                    diag_callback(f"CLIENT_INIT: client_obj={hex(id(client))} mode={client_mode} host={host} port={port}", base_ctx)
                 except Exception:
                     pass
 
@@ -1297,7 +1311,7 @@ class AppController:
                     except Exception:
                         trace_flag = False
                     try:
-                        diag_callback(f"CLIENT_CONNECTED: client_obj={hex(id(client))} impl={impl_id} sock={sock_desc} trace_installed={trace_flag}")
+                        diag_callback(f"CLIENT_CONNECTED: client_obj={hex(id(client))} impl={impl_id} sock={sock_desc} trace_installed={trace_flag}", base_ctx)
                     except Exception:
                         pass
                 except Exception:
@@ -1506,6 +1520,13 @@ class AppController:
     def write_tag_value(self, tag_item, value, host: str = None, port: int = 502, unit: int = 1, timeout: float = 3.0, connect_timeout: float | None = None, client_mode: str = "tcp", client_params: dict | None = None, diag_callback=None):
         """Synchronous wrapper for writing a tag value."""
         import asyncio
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("write_tag_value cannot be called while an event loop is running; use write_tag_value_async instead.")
 
         return asyncio.run(self.write_tag_value_async(tag_item, value, host=host, port=port, unit=unit, timeout=timeout, connect_timeout=connect_timeout, client_mode=client_mode, client_params=client_params, diag_callback=diag_callback))
 

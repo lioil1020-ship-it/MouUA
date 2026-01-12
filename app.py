@@ -1,6 +1,8 @@
 import sys
 import os
 import time
+import threading
+import logging
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -38,6 +40,7 @@ except Exception:
 from clipboard import ClipboardManager
 from controllers import AppController
 from modbus_worker import AsyncPoller
+from core.diagnostics import DiagnosticsManager
 
 class MonitorWindow(QMainWindow):
     """Deprecated placeholder: full implementation moved to `deprecated/moved_monitor_window.py`.
@@ -51,11 +54,13 @@ class TerminalWindow(QMainWindow):
     """終端視窗 - 顯示診斷信息。
     支援以 device_item 為過濾，當 device_item 為 None 時顯示全部訊息（global）。
     """
-    def __init__(self, parent=None, device_item=None):
+    def __init__(self, parent=None, device_item=None, diagnostics_manager=None):
         super().__init__(parent)
         self.device_item = device_item
         # keep a reference to the main IoTApp parent for callbacks
         self.parent_window = parent
+        self._diag_manager = diagnostics_manager
+        self._diag_listener_token = None
         self.setWindowTitle("Diagnostics" if device_item is None else f"Diagnostics - {self._device_path(device_item)}")
         self.resize(1000, 600)
 
@@ -104,10 +109,93 @@ class TerminalWindow(QMainWindow):
             except Exception:
                 pass
 
+        if self._diag_manager:
+            try:
+                # Use a thread-safe, minimal matcher (only check for TX/RX text)
+                # and perform the full Qt-based matching inside the callback on
+                # the main thread. This avoids accessing Qt objects from worker
+                # threads which can raise and cause messages to be dropped.
+                def _cb(ts, txt, ctx=None):
+                    try:
+                        def _deliver():
+                            try:
+                                if self.matches_message(txt, ctx):
+                                    self.add_message(ts, txt, ctx)
+                            except Exception:
+                                pass
+
+                        if threading.current_thread() is threading.main_thread():
+                            _deliver()
+                        else:
+                            QTimer.singleShot(0, _deliver)
+                    except Exception:
+                        pass
+
+                # Lightweight matcher executed in emission thread only checks for TX/RX markers
+                # Accept messages like 'TX FC3' or 'RX FC1' as well as 'TX:'/'RX:'.
+                import re as _re
+                lightweight_matcher = lambda t, c: bool(_re.search(r"\b(TX|RX)\b", str(t or "")))
+
+                # Register without a matcher so the manager forwards all
+                # records; perform per-window filtering on the main thread
+                # inside `_cb` to avoid missing messages due to any
+                # background-thread matcher false-negatives.
+                self._diag_listener_token = self._diag_manager.register_listener(
+                    name=f"terminal-{id(self)}",
+                    callback=_cb,
+                    matcher=None,
+                )
+                try:
+                    snap = self._diag_manager.snapshot()
+                    for rec in snap:
+                        try:
+                            # Pass structured context to matcher so replayed records
+                            # are evaluated using the same rules as live emissions.
+                            ctx = getattr(rec, 'context', None)
+                            if self.matches_message(rec.text, ctx):
+                                _cb(rec.timestamp, rec.text, ctx)
+                        except Exception:
+                            pass
+                    # track last processed index so periodic poll only handles new records
+                    try:
+                        self._last_diag_index = len(snap)
+                    except Exception:
+                        self._last_diag_index = 0
+                except Exception:
+                    self._last_diag_index = 0
+            except Exception:
+                self._diag_listener_token = None
+
         # 建立菜單欄
         self._setup_menu()
 
+        # start a lightweight poll timer to catch any records that might
+        # not arrive via callback due to threading or emission timing issues.
+        try:
+            self._diag_poll_timer = QTimer(self)
+            self._diag_poll_timer.setInterval(200)
+            self._diag_poll_timer.timeout.connect(self._poll_diagnostics)
+            self._diag_poll_timer.start()
+        except Exception:
+            self._diag_poll_timer = None
+
     def closeEvent(self, event):
+        try:
+            if self._diag_manager and self._diag_listener_token:
+                try:
+                    self._diag_manager.unregister_listener(self._diag_listener_token)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            if getattr(self, '_diag_poll_timer', None):
+                try:
+                    self._diag_poll_timer.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         try:
             p = None
             try:
@@ -134,75 +222,144 @@ class TerminalWindow(QMainWindow):
             it = it.parent()
         return ".".join(parts)
 
-    def matches_message(self, text: str) -> bool:
-        """決定訊息是否應顯示在此視窗。
-        規則：若為 global（device_item is None）則全部接受；
-        否則檢查是否包含 tag id (id=12345) 或裝置 path 或裝置名稱。
-        """
+    def matches_message(self, text: str, ctx=None) -> bool:
+        """決定訊息是否應顯示在此視窗（較簡潔、安全的實作）。"""
+        # Global diagnostics window: show everything
         if self.device_item is None:
             return True
+
+        txt = str(text or "")
+
+        import re
+        # Only TX/RX shown in per-device windows; accept 'TX' or 'RX' tokens
+        if not re.search(r"\b(TX|RX)\b", txt):
+            return False
+
+        # Prefer structured context when available
         try:
-            txt = str(text or "")
-            # If the poller prefixed device context, trust it first (DEV_ID/HOST/PORT)
-            try:
-                import re
-                m2 = re.search(r"DEV_ID=(\d+)", txt)
-                if m2:
+            if isinstance(ctx, dict):
+                # match explicit device id if provided
+                # NOTE: some emitters include an object `id()` which is not
+                # stable across tree rebuilds; only accept immediately when
+                # it equals the window's known id, otherwise continue and
+                # allow other matching heuristics (host/port/unit, path).
+                dev_ctx = ctx.get("dev_id") or ctx.get("device_id")
+                if dev_ctx is not None and getattr(self, "_device_item_id", None) is not None:
                     try:
-                        if self._device_item_id is not None and int(m2.group(1)) == int(self._device_item_id):
+                        if int(dev_ctx) == int(self._device_item_id):
                             return True
-                        else:
+                    except Exception:
+                        pass
+
+                # match unit if present
+                if self._device_unit is not None and ctx.get("unit") is not None:
+                    try:
+                        if int(ctx.get("unit")) != int(self._device_unit):
                             return False
                     except Exception:
                         pass
+
+                # match host/port against channel params when possible
+                try:
+                    ch = self.device_item.parent()
+                    ch_params = ch.data(2, Qt.ItemDataRole.UserRole) if ch else None
+                except Exception:
+                    ch_params = None
+                if isinstance(ch_params, dict):
+                    ch_host = ch_params.get('host') or ch_params.get('ip') or ch_params.get('address')
+                    ch_port = ch_params.get('port')
+                    if ctx.get('host') is not None and ch_host is not None:
+                        if str(ctx.get('host')) != str(ch_host):
+                            return False
+                    if ctx.get('port') is not None and ch_port is not None:
+                        try:
+                            if int(ctx.get('port')) != int(ch_port):
+                                return False
+                        except Exception:
+                            pass
+
+                # match device_path/device_name when provided
+                if ctx.get('device_path') and getattr(self, '_device_path_str', None) is not None:
+                    try:
+                        if str(ctx.get('device_path')) != str(self._device_path_str):
+                            return False
+                    except Exception:
+                        pass
+                if ctx.get('device_name'):
+                    try:
+                        name = self.device_item.text(0)
+                    except Exception:
+                        name = None
+                    if name and str(ctx.get('device_name')) != str(name):
+                        return False
+
+                # enforce FC whitelist when present
+                fc = ctx.get('fc')
+                if fc is not None:
+                    try:
+                        if int(fc) not in (1, 2, 3, 4, 5, 6, 15, 16):
+                            return False
+                    except Exception:
+                        pass
+
+                return True
+        except Exception:
+            # fall through to heuristics
+            pass
+
+        # Fallback: look for DEV_ID= in text
+        m2 = re.search(r"DEV_ID=(\d+)", txt)
+        if m2:
+            try:
+                if self._device_item_id is not None and int(m2.group(1)) == int(self._device_item_id):
+                    return True
             except Exception:
                 pass
 
-            # If message contains TX/RX hex, try to extract unit id and match to this device.
-            if "TX:" in txt or "RX:" in txt:
+        # Heuristic: parse hex payload between | ... |
+        m = re.search(r"\|\s*([0-9A-Fa-f\s]+)\s*\|", txt)
+        if m:
+            parts = [p for p in m.group(1).split() if p]
+            bytes_list = []
+            for p in parts:
                 try:
-                    import re
-                    m = re.search(r"\|\s*([0-9A-Fa-f\s]+)\s*\|", txt)
-                    if m:
-                        hex_s = m.group(1)
-                        parts = [p for p in hex_s.split() if p]
-                        bytes_list = [int(p, 16) for p in parts if len(p) <= 2]
-                        if bytes_list:
-                            # MBAP: txid(2)+prot(2)+len(2)+unit(1) -> unit at index 6
-                            candidate_unit = None
-                            if len(bytes_list) >= 7:
-                                candidate_unit = bytes_list[6]
-                            # RTU or fallback: unit is first byte
-                            if candidate_unit is None:
-                                candidate_unit = bytes_list[0]
-                            if self._device_unit is not None:
-                                try:
-                                    if int(candidate_unit) == int(self._device_unit):
-                                        return True
-                                    else:
-                                        return False
-                                except Exception:
-                                    pass
+                    if len(p) <= 2:
+                        bytes_list.append(int(p, 16))
                 except Exception:
-                    pass
-            # match id=NUMBER
-            import re
-            for m in re.finditer(r"id=(\d+)", txt):
+                    continue
+            candidate_unit = None
+            if len(bytes_list) >= 7:
+                candidate_unit = bytes_list[6]
+            if candidate_unit is None and bytes_list:
+                candidate_unit = bytes_list[0]
+            if candidate_unit is not None and self._device_unit is not None:
                 try:
-                    if int(m.group(1)) in self._device_tag_ids:
+                    if int(candidate_unit) == int(self._device_unit):
                         return True
                 except Exception:
                     pass
-            # match device path or name
-            if self._device_path_str and self._device_path_str in txt:
-                return True
-            if self.device_item.text(0) and self.device_item.text(0) in txt:
-                return True
+
+        # match id=NUMBER tokens against known tag ids
+        for m in re.finditer(r"id=(\d+)", txt):
+            try:
+                if int(m.group(1)) in self._device_tag_ids:
+                    return True
+            except Exception:
+                pass
+
+        # textual match device path or name
+        if getattr(self, '_device_path_str', None) and self._device_path_str in txt:
+            return True
+        try:
+            name = self.device_item.text(0)
         except Exception:
-            pass
+            name = None
+        if name and name in txt:
+            return True
+
         return False
 
-    def add_message(self, ts: str, text: str):
+    def add_message(self, ts: str, text: str, ctx=None):
         try:
             from datetime import datetime as _dt
             # ts is a time string like HH:MM:SS.mmm; build date string for Date col
@@ -211,36 +368,83 @@ class TerminalWindow(QMainWindow):
             except Exception:
                 date_str = ""
 
+            # prevent exact-duplicate entries (same time + same data) appearing
+            try:
+                last_row = self.diagnostics_table.rowCount() - 1
+                if last_row >= 0:
+                    last_time_item = self.diagnostics_table.item(last_row, 1)
+                    last_data_item = self.diagnostics_table.item(last_row, 4)
+                    last_time = last_time_item.text() if last_time_item is not None else None
+                    last_data = last_data_item.text() if last_data_item is not None else None
+                    if last_time == ts and last_data == str(text or ""):
+                        return
+            except Exception:
+                pass
+
             row = self.diagnostics_table.rowCount()
             self.diagnostics_table.insertRow(row)
 
-            # Event/Length/Data parsing
+            # Event/Length/Data parsing with optional structured context
             event = ""
             length = ""
             data_text = str(text or "")
+            meta_bits = []
             try:
-                import re
-                m = re.search(r"TX:\s*\|\s*([0-9A-Fa-f\s]+)\s*\|", text)
-                if not m:
-                    m = re.search(r"RX:\s*\|\s*([0-9A-Fa-f\s]+)\s*\|", text)
-                if m:
-                    hex_s = m.group(1)
-                    # normalize spacing
-                    parts = [p for p in hex_s.split() if p]
-                    data_text = " ".join(p.upper() for p in parts)
+                if isinstance(ctx, dict):
+                    direction = str(ctx.get("direction") or "").upper()
+                    fc_val = ctx.get("fc")
                     try:
-                        length = str(len(parts))
+                        fc_val = int(fc_val)
                     except Exception:
-                        length = ""
-                    if 'TX:' in text:
-                        event = 'TX'
-                    elif 'RX:' in text:
-                        event = 'RX'
-                else:
-                    # fallback: try to show entire text in Data
-                    data_text = text
+                        fc_val = fc_val
+                    if direction:
+                        event = direction if fc_val is None else f"{direction} FC{fc_val}"
+                    if ctx.get("length") is not None:
+                        try:
+                            length = str(int(ctx.get("length")))
+                        except Exception:
+                            length = str(ctx.get("length"))
+                    hex_text = ctx.get("hex") or ctx.get("hex_str")
+                    if hex_text:
+                        data_text = str(hex_text)
+                    unit_val = ctx.get("unit")
+                    host_val = ctx.get("host")
+                    port_val = ctx.get("port")
+                    if unit_val is not None:
+                        meta_bits.append(f"unit={unit_val}")
+                    if host_val:
+                        meta_bits.append(f"host={host_val}")
+                    if port_val is not None:
+                        meta_bits.append(f"port={port_val}")
+                    if meta_bits and data_text:
+                        data_text = f"{data_text}   ({', '.join(meta_bits)})"
             except Exception:
-                data_text = text
+                pass
+
+            # fallback parsing when no structured context or missing pieces
+            if not event:
+                try:
+                    import re
+                    txt_str = str(text or "")
+                    m = re.search(r"TX:\s*\|\s*([0-9A-Fa-f\s]+)\s*\|", txt_str)
+                    if not m:
+                        m = re.search(r"RX:\s*\|\s*([0-9A-Fa-f\s]+)\s*\|", txt_str)
+                    if m:
+                        hex_s = m.group(1)
+                        parts = [p for p in hex_s.split() if p]
+                        data_text = " ".join(p.upper() for p in parts)
+                        try:
+                            length = length or str(len(parts))
+                        except Exception:
+                            length = length or ""
+                        if 'TX:' in txt_str:
+                            event = 'TX'
+                        elif 'RX:' in txt_str:
+                            event = 'RX'
+                    else:
+                        data_text = txt_str
+                except Exception:
+                    data_text = str(text or "")
 
             date_item = QTableWidgetItem(date_str)
             date_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -258,6 +462,40 @@ class TerminalWindow(QMainWindow):
             self.diagnostics_table.setItem(row, 3, length_item)
             self.diagnostics_table.setItem(row, 4, data_item)
             self.diagnostics_table.scrollToBottom()
+        except Exception:
+            pass
+
+    def _poll_diagnostics(self):
+        """Periodically poll DiagnosticsManager.snapshot() and process new records."""
+        try:
+            if not getattr(self, '_diag_manager', None):
+                return
+            try:
+                snap = self._diag_manager.snapshot()
+            except Exception:
+                return
+            try:
+                last = getattr(self, '_last_diag_index', 0) or 0
+            except Exception:
+                last = 0
+            total = len(snap)
+            if total <= last:
+                return
+            for rec in snap[last:]:
+                try:
+                    ctx = getattr(rec, 'context', None)
+                    if self.matches_message(rec.text, ctx):
+                        # ensure UI update on main thread
+                        try:
+                            self.add_message(rec.timestamp, rec.text, ctx)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            try:
+                self._last_diag_index = total
+            except Exception:
+                self._last_diag_index = total
         except Exception:
             pass
     
@@ -344,12 +582,26 @@ class TerminalWindow(QMainWindow):
     def _set_diag_show_only_txrx(self, v: bool):
         try:
             self._diag_show_only_txrx = bool(v)
+            try:
+                if getattr(self, 'diagnostics', None):
+                    self.diagnostics.set_only_txrx(bool(v))
+            except Exception:
+                pass
         except Exception:
             pass
 
     def _set_diag_show_raw(self, v: bool):
         try:
             self._diag_show_raw = bool(v)
+            try:
+                if getattr(self, 'diagnostics', None):
+                    # raw view shows everything; otherwise respect the TX/RX-only toggle
+                    if self._diag_show_raw:
+                        self.diagnostics.set_only_txrx(False)
+                    else:
+                        self.diagnostics.set_only_txrx(bool(self._diag_show_only_txrx))
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -372,6 +624,21 @@ class IoTApp(QMainWindow):
         # When True, auto-opening the Diagnostics window is suppressed (set when user closes it)
         self._terminal_auto_open_blocked = False
 
+        # Centralized diagnostics manager
+        try:
+            # 建立 DiagnosticsManager：不要在建立時過濾，讓 per-device 視窗自行過濾
+            self.diagnostics = DiagnosticsManager(capacity=8000, logger=logging.getLogger("diagnostics"), only_txrx=False)
+        except Exception:
+            self.diagnostics = None
+
+        # Avoid spamming stdout by default; attach a NullHandler so libraries won't warn.
+        try:
+            diag_logger = logging.getLogger("diagnostics")
+            if not diag_logger.handlers:
+                diag_logger.addHandler(logging.NullHandler())
+        except Exception:
+            pass
+
         # 檔案路徑：使用 %APPDATA%/ModUA 存放 temp.json 與 last project path
         try:
             appdata_root = os.getenv('APPDATA') or os.path.join(os.path.expanduser('~'), '.modua')
@@ -389,54 +656,10 @@ class IoTApp(QMainWindow):
         # 管理多個 per-device diagnostics 視窗
         self.terminal_windows = []
 
-        # Install pymodbus log handler to capture SEND/RECV and forward to Diagnostics
-        try:
-            class PymodbusLogHandler(logging.Handler):
-                def __init__(self, app, callback):
-                    super().__init__()
-                    self.app = app
-                    self.callback = callback
-
-                def emit(self, record):
-                    try:
-                        msg = self.format(record)
-                        # if user requested raw logger messages, forward whole text
-                        try:
-                            if getattr(self.app, '_diag_show_raw', False):
-                                self.callback(msg)
-                                return
-                        except Exception:
-                            pass
-
-                        # extract hex tokens like 0x1 0xA or \x01 sequences
-                        hex_tokens = re.findall(r'0x[0-9a-fA-F]{1,2}', msg)
-                        if hex_tokens:
-                            hex_str = " ".join(f"{int(h,16):02X}" for h in hex_tokens)
-                        else:
-                            hex_bytes = re.findall(r'\\x[0-9a-fA-F]{2}', msg)
-                            if hex_bytes:
- 
-                                hex_str = " ".join(h.replace('\\x','').upper() for h in hex_bytes)
-                            else:
-                                hex_str = msg
-
-                        if re.search(r'SEND', msg, re.I):
-                            self.callback(f"TX: | {hex_str} |")
-                        elif re.search(r'RECV', msg, re.I):
-                            self.callback(f"RX: | {hex_str} |")
-                    except Exception:
-                        pass
-
-            try:
-                pm_logger = logging.getLogger('pymodbus')
-                pm_logger.setLevel(logging.DEBUG)
-                h = PymodbusLogHandler(self, self.append_diagnostic)
-                h.setLevel(logging.DEBUG)
-                pm_logger.addHandler(h)
-            except Exception:
-                pass
-        except Exception:
-            pass
+        # Note: previously installed a pymodbus log handler that forwarded
+        # SEND/RECV messages into Diagnostics; removed to avoid terminal
+        # clutter and duplicate emissions. Diagnostics are now produced by
+        # pollers/clients directly via `append_diagnostic`.
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.tree = ConnectivityTree()
@@ -721,7 +944,7 @@ class IoTApp(QMainWindow):
     def open_device_diagnostics(self, device_item):
         """Open a diagnostics window filtered to the given device_item."""
         try:
-            tw = TerminalWindow(self, device_item=device_item)
+            tw = TerminalWindow(self, device_item=device_item, diagnostics_manager=getattr(self, 'diagnostics', None))
             self.terminal_windows.append(tw)
             tw.show()
             tw.raise_()
@@ -800,17 +1023,43 @@ class IoTApp(QMainWindow):
             )
             == QMessageBox.StandardButton.Yes
         ):
-            # 由大到小排序索引，避免刪除過程中索引偏移
-            rows = sorted([index.row() for index in indices], reverse=True)
-            for row in rows:
-                target_item = current_node.child(row)
-                if target_item:
-                    current_node.removeChild(target_item)
+            # collect selected rows and delete corresponding tag tree items
+            try:
+                rows = sorted([r.row() for r in indices], reverse=True)
+                for r in rows:
+                    try:
+                        itm = self.tag_table.item(r, 0)
+                        if itm is None:
+                            continue
+                        tag_tree_item = None
+                        try:
+                            tag_tree_item = itm.data(Qt.ItemDataRole.UserRole)
+                        except Exception:
+                            tag_tree_item = None
+                        if tag_tree_item is not None:
+                            try:
+                                parent = tag_tree_item.parent() or self.tree.invisibleRootItem()
+                                parent.removeChild(tag_tree_item)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
-            # 刪除完後刷新表格
-            self.update_right_table(current_node, 0)
-
-    # --- ➕ 新增功能 (Channels, Devices, Groups, Tags) ---
+            # refresh UI and notify controller about structure change
+            try:
+                self.update_right_table(current_node, 0)
+            except Exception:
+                pass
+            try:
+                if hasattr(self, '_on_project_structure_changed'):
+                    try:
+                        self._on_project_structure_changed()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def on_new_channel(self, parent_item):
         suggested = f"Channel{parent_item.childCount() + 1}"
@@ -957,37 +1206,49 @@ class IoTApp(QMainWindow):
                 "Scaling",
                 "Description",
             ])
+
+            def _add_tag_row(child):
+                row = self.tag_table.rowCount()
+                self.tag_table.insertRow(row)
+                scaling_data = child.data(5, Qt.ItemDataRole.UserRole) or {}
+                scale_type = scaling_data.get("type", "None")
+
+                it0 = QTableWidgetItem(child.text(0))
+                it0.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                self.tag_table.setItem(row, 0, it0)
+
+                it1 = QTableWidgetItem(child.data(1, Qt.ItemDataRole.UserRole) or "")
+                it1.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.tag_table.setItem(row, 1, it1)
+
+                it2 = QTableWidgetItem(child.data(2, Qt.ItemDataRole.UserRole) or "")
+                it2.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.tag_table.setItem(row, 2, it2)
+
+                it3 = QTableWidgetItem(f"{child.data(4, Qt.ItemDataRole.UserRole) or '10'} ms")
+                it3.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.tag_table.setItem(row, 3, it3)
+
+                it4 = QTableWidgetItem(scale_type)
+                it4.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.tag_table.setItem(row, 4, it4)
+
+                it5 = QTableWidgetItem(child.data(3, Qt.ItemDataRole.UserRole) or "")
+                it5.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.tag_table.setItem(row, 5, it5)
+
             if node_type == "Device":
                 # show only direct Tag children of the device (do not include tags inside groups)
                 for i in range(item.childCount()):
                     child = item.child(i)
-                    if (
-                        child.data(0, Qt.ItemDataRole.UserRole) == "Tag"
-                    ):
-                        row = self.tag_table.rowCount()
-                        self.tag_table.insertRow(row)
-                        scaling_data = child.data(5, Qt.ItemDataRole.UserRole) or {}
-                        scale_type = scaling_data.get("type", "None")
-                        it0 = QTableWidgetItem(child.text(0))
-                        it0.setTextAlignment(
-                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                        )
-                        self.tag_table.setItem(row, 0, it0)
-                        it1 = QTableWidgetItem(child.data(1, Qt.ItemDataRole.UserRole) or "")
-                        it1.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        self.tag_table.setItem(row, 1, it1)
-                        it2 = QTableWidgetItem(child.data(2, Qt.ItemDataRole.UserRole) or "")
-                        it2.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        self.tag_table.setItem(row, 2, it2)
-                        it3 = QTableWidgetItem(f"{child.data(4, Qt.ItemDataRole.UserRole) or '10'} ms")
-                        it3.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        self.tag_table.setItem(row, 3, it3)
-                        it4 = QTableWidgetItem(scale_type)
-                        it4.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        self.tag_table.setItem(row, 4, it4)
-                        it5 = QTableWidgetItem(child.data(3, Qt.ItemDataRole.UserRole) or "")
-                        it5.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                        self.tag_table.setItem(row, 5, it5)
+                    if child.data(0, Qt.ItemDataRole.UserRole) == "Tag":
+                        _add_tag_row(child)
+            else:
+                # Group: show only direct Tag children (no nested groups)
+                for i in range(item.childCount()):
+                    child = item.child(i)
+                    if child.data(0, Qt.ItemDataRole.UserRole) == "Tag":
+                        _add_tag_row(child)
 
     def _mark_dirty(self, v: bool = True):
         try:
@@ -1122,6 +1383,23 @@ class IoTApp(QMainWindow):
             # stop runtime and pollers cleanly
             try:
                 self.stop_runtime()
+            except Exception:
+                pass
+
+            # stop OPC UA server if running
+            try:
+                if getattr(self, 'opc_server', None):
+                    try:
+                        self.opc_server.stop()
+                    except Exception:
+                        pass
+                    self.opc_server = None
+            except Exception:
+                pass
+
+            try:
+                if getattr(self, 'diagnostics', None):
+                    self.diagnostics.stop()
             except Exception:
                 pass
 
@@ -1914,145 +2192,62 @@ class IoTApp(QMainWindow):
 
         return (host, port, unit, interval, fc)
 
-    def append_diagnostic(self, text: str):
-        import time as _time
-        import threading
-        # append_diagnostic routes messages to per-device terminal windows only.
-        # No longer write fallback files here.
-
-        def _find_device_item_by_id(dev_id):
-            try:
-                root = getattr(self, 'tree', None)
-                if root is None:
-                    return None
-                conn = getattr(root, 'conn_node', None)
-                if conn is None:
-                    return None
-
-                def _walk(node):
-                    try:
-                        if id(node) == int(dev_id):
-                            return node
-                    except Exception:
-                        pass
-                    try:
-                        for i in range(node.childCount()):
-                            child = node.child(i)
-                            found = _walk(child)
-                            if found:
-                                return found
-                    except Exception:
-                        pass
-                    return None
-
-                return _walk(conn)
-            except Exception:
-                return None
-
-        # Only show a minimal set of diagnostics to reduce noise in the UI.
-        # Whitelist: keep TX/RX lines and connection info that begins with 'Using '
+    def append_diagnostic(self, text: str, context=None):
         try:
-            txt = str(text or "")
-            # Respect user toggles (stored on self) — filter is currently TX/RX-only
-            # If user requested raw logger messages, do not filter anything here
-            # Always restrict Diagnostics to TX/RX only (no other messages)
-            try:
-                if not ("TX:" in txt or "RX:" in txt):
-                    return
-            except Exception:
+            if getattr(self, 'diagnostics', None):
+                self.diagnostics.emit(text, context=context)
+                # Also proactively deliver to any already-open TerminalWindow
+                # instances to ensure per-device windows update immediately
+                try:
+                    def _deliver_to_windows():
+                        try:
+                            wins = getattr(self, 'terminal_windows', []) or []
+                            # try to build a structured context for better matching
+                            try:
+                                parsed_ctx = None
+                                if getattr(self, 'diagnostics', None) and hasattr(self.diagnostics, '_parse_txrx_context'):
+                                    try:
+                                        parsed_ctx = self.diagnostics._parse_txrx_context(text, context)
+                                    except Exception:
+                                        parsed_ctx = context
+                                else:
+                                    parsed_ctx = context
+                            except Exception:
+                                parsed_ctx = context
+
+                            for w in wins:
+                                try:
+                                    if not (hasattr(w, 'matches_message') and hasattr(w, 'add_message')):
+                                        continue
+                                    try:
+                                        if w.matches_message(text, parsed_ctx):
+                                            w.add_message(time.strftime("%H:%M:%S") + ".000", text, parsed_ctx)
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                    # Ensure UI calls run on the main thread
+                    try:
+                        from PyQt6.QtCore import QTimer
+                        QTimer.singleShot(0, _deliver_to_windows)
+                    except Exception:
+                        try:
+                            _deliver_to_windows()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
                 return
         except Exception:
             pass
-
-        from datetime import datetime as _dt
         try:
-            t = _time.time()
-            dt = _dt.fromtimestamp(t)
-            ms = int(dt.microsecond / 1000)
-            ts = f"{dt.strftime('%H:%M:%S')}.{ms:03d}"
+            # fallback if diagnostics manager is unavailable
+            logging.debug(str(text))
         except Exception:
-            ts = _time.strftime("%H:%M:%S", _time.localtime())
-
-        # Do not auto-open any diagnostics window here. OPC-related lines are
-        # kept as diagnostics prefixed with 'OPC:' and will be routed to any
-        # matching per-device windows by `append_diagnostic` matching rules.
-        
-        def _add_to_table():
-            try:
-                # route message to all managed terminal windows that match the message
-                wins = getattr(self, 'terminal_windows', []) or []
-                for tw in list(wins):
-                    try:
-                        if tw is None:
-                            continue
-                        try:
-                            # If message contains device context, try to tag transport type
-                            import re
-                            m_dev = re.search(r"DEV_ID=(\d+)", str(text or ""))
-                            if m_dev:
-                                dev_item = _find_device_item_by_id(int(m_dev.group(1)))
-                                transport_tag = None
-                                try:
-                                    if dev_item is not None:
-                                        ch = dev_item.parent()
-                                        if ch is not None and ch.data(0, Qt.ItemDataRole.UserRole) == "Channel":
-                                            ch_params = ch.data(2, Qt.ItemDataRole.UserRole) or {}
-                                            driver_name = (ch.data(1, Qt.ItemDataRole.UserRole) or "").lower()
-                                            method = str(ch_params.get('method') or driver_name or "").lower()
-                                            # determine transport
-                                            if 'rtu' in method or 'serial' in method or any(k in (ch_params or {}) for k in ('com', 'adapter', 'serial_port')):
-                                                transport_tag = 'SERIAL'
-                                            elif 'websocket' in method or ch_params.get('transport') in ('websocket', 'ws') or 'ws' in method:
-                                                transport_tag = 'WEBSOCKET'
-                                            else:
-                                                transport_tag = 'TCP'
-                                except Exception:
-                                    transport_tag = None
-                                if transport_tag:
-                                    # prefer to match terminal filtering on enriched text
-                                    enriched_text = f"[{transport_tag}] {text}"
-                                else:
-                                    enriched_text = text
-                            else:
-                                enriched_text = text
-
-                            if hasattr(tw, 'matches_message'):
-                                ok = tw.matches_message(enriched_text)
-                            else:
-                                ok = True
-                        except Exception:
-                            ok = True
-                        if ok:
-                            try:
-                                if hasattr(tw, 'add_message'):
-                                    # if we enriched the text above, pass the enriched variant
-                                    try:
-                                        tw.add_message(ts, enriched_text)
-                                    except Exception:
-                                        tw.add_message(ts, text)
-                                else:
-                                    # fallback: direct table insert
-                                    row = tw.diagnostics_table.rowCount()
-                                    tw.diagnostics_table.insertRow(row)
-                                    time_item = QTableWidgetItem(ts)
-                                    time_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                                    tw.diagnostics_table.setItem(row, 0, time_item)
-                                    tw.diagnostics_table.setItem(row, 1, QTableWidgetItem(enriched_text if 'enriched_text' in locals() else text))
-                                    tw.diagnostics_table.scrollToBottom()
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        
-        # 不再自動開啟全域 Diagnostics；Diagnostics 僅透過 Device 右鍵顯示。
-
-        if threading.current_thread() is threading.main_thread():
-            _add_to_table()
-        else:
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(0, _add_to_table)
+            pass
 
     def _write_opc_trace(self, text: str):
         """Route OPC-related messages into diagnostics without auto-opening windows."""
@@ -2088,6 +2283,11 @@ class IoTApp(QMainWindow):
 
     def clear_diagnostics(self):
         try:
+            if getattr(self, 'diagnostics', None):
+                self.diagnostics.clear()
+        except Exception:
+            pass
+        try:
             wins = getattr(self, 'terminal_windows', []) or []
             for w in wins:
                 try:
@@ -2119,8 +2319,8 @@ class IoTApp(QMainWindow):
                 mon_exists = getattr(self, 'monitor_table', None) is not None
                 rows = self.monitor_table.rowCount() if mon_exists else 'NA'
                 try:
-                    with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
-                        _f.write(f"{ts}\tRUNTIME_START: monitor_exists={mon_exists} rows={rows}\n")
+                    if getattr(self, 'diagnostics', None):
+                        self.diagnostics.emit(f"RUNTIME_START: monitor_exists={mon_exists} rows={rows}")
                 except Exception:
                     pass
             except Exception:
@@ -2827,19 +3027,7 @@ class IoTApp(QMainWindow):
                     pass
                 self.monitor_counts[(tid, idx)] = 0
                 self.monitor_last_values[(tid, idx)] = None
-                try:
-                    self.append_diagnostic(f"MONITOR_ADD: id={tid} row={row} idx={idx} dtype={data_type}")
-                except Exception:
-                    pass
-                try:
-                    from datetime import datetime as _dt
-                    t = _dt.now()
-                    ms = int(t.microsecond / 1000)
-                    ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
-                    with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
-                        _f.write(f"{ts}\tMONITOR_ADD: id={tid} row={row} idx={idx} dtype={data_type}\n")
-                except Exception:
-                    pass
+                # MONITOR_ADD diagnostics suppressed to reduce noise
         else:
             # 非数组，正常添加
             row = self.monitor_table.rowCount()
@@ -2883,19 +3071,7 @@ class IoTApp(QMainWindow):
                 pass
             self.monitor_counts[tid] = 0
             self.monitor_last_values[tid] = None
-            try:
-                self.append_diagnostic(f"MONITOR_ADD: id={tid} row={row} idx=None dtype={data_type}")
-            except Exception:
-                pass
-            try:
-                from datetime import datetime as _dt
-                t = _dt.now()
-                ms = int(t.microsecond / 1000)
-                ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
-                with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
-                    _f.write(f"{ts}\tMONITOR_ADD: id={tid} row={row} idx=None dtype={data_type}\n")
-            except Exception:
-                pass
+            # MONITOR_ADD diagnostics suppressed to reduce noise
         
         if tag_item not in self.monitored_tags:
             self.monitored_tags.append(tag_item)
@@ -3135,7 +3311,7 @@ class IoTApp(QMainWindow):
         self.pollers = []
         for (h, pnum, u, inv, fcc), tags_for_group in groups.items():
             try:
-                poller = AsyncPoller(self.controller, host=h, port=pnum, unit=u, interval=inv)
+                poller = AsyncPoller(self.controller, host=h, port=pnum, unit=u, interval=inv, diag_callback=self.append_diagnostic)
                 # attach serial metadata to poller so worker can emit appropriate diagnostics
                 try:
                     first_tag_for_group = tags_for_group[0] if tags_for_group else None
@@ -3210,10 +3386,7 @@ class IoTApp(QMainWindow):
                         poller.tag_polled.connect(self._handle_tag_polled_maybe_update_broker)
                 except Exception:
                     pass
-                try:
-                    poller.diag_signal.connect(self.append_diagnostic)
-                except Exception:
-                    pass
+                # diag routed via diag_callback -> DiagnosticsManager; keep signal unused to avoid duplicates
                 poller.start()
                 try:
                     self.append_diagnostic(f"POLLER_START: key={(h,pnum,u,inv)} running_tags={len(tags_for_group)}")
@@ -3263,19 +3436,7 @@ class IoTApp(QMainWindow):
                     row = self.monitor_row.get((canonical_key, idx))
                 if row is None:
                     # diagnostic: record missing monitor row for this tag/index
-                    try:
-                        self.append_diagnostic(f"MONITOR_MISS: id={tid} idx={idx} canonical={canonical_key}")
-                    except Exception:
-                        pass
-                    try:
-                        from datetime import datetime as _dt
-                        t = _dt.now()
-                        ms = int(t.microsecond / 1000)
-                        ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
-                        with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
-                            _f.write(f"{ts}\tMONITOR_MISS: id={tid} idx={idx} canonical={canonical_key}\n")
-                    except Exception:
-                        pass
+                    # MONITOR_MISS diagnostics suppressed to reduce noise
                     continue
                 
                 # 更新值 (布林顯示為 1/0)
@@ -3323,19 +3484,7 @@ class IoTApp(QMainWindow):
                 row = self.monitor_row.get(canonical_key)
             if row is None:
                 # diagnostic: missing scalar monitor row
-                try:
-                    self.append_diagnostic(f"MONITOR_MISS: id={tid} canonical={canonical_key}")
-                except Exception:
-                    pass
-                try:
-                    from datetime import datetime as _dt
-                    t = _dt.now()
-                    ms = int(t.microsecond / 1000)
-                    ts = f"{t.strftime('%H:%M:%S')}.{ms:03d}"
-                    with open("Diagnostics.txt", "a", encoding="utf-8") as _f:
-                        _f.write(f"{ts}\tMONITOR_MISS: id={tid} canonical={canonical_key}\n")
-                except Exception:
-                    pass
+                # MONITOR_MISS diagnostics suppressed to reduce noise
                 return
             
             # 更新值 (布林顯示為 1/0)

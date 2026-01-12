@@ -1,4 +1,4 @@
-"""Lightweight wrapper around pymodbus clients.
+﻿"""Lightweight wrapper around pymodbus clients.
 
 Provides a compact, robust `ModbusClient` with the async/sync surface
 used by the poller: `connect_async`, `close_async`, and `read_async`.
@@ -38,6 +38,9 @@ class ModbusClient:
         self.connect_timeout = float(connect_timeout or 3.0)
         self.request_timeout = float(request_timeout or 2.0)
         self.kwargs = kwargs or {}
+        # allow callers to force TX/RX emission even when a transport trace is installed
+        self.force_diag_emit = bool(self.kwargs.pop("force_diag_emit", False))
+        self.emit_synthetic_tx = bool(self.kwargs.get("emit_synthetic_tx", False))
         self._client = None
         self.diag_callback = diag_callback
         # transaction id counter for synthetic MBAP generation
@@ -46,12 +49,47 @@ class ModbusClient:
         except Exception:
             self._txid = 0
 
-    def _transport_trace_installed(self) -> bool:
-        """Return True if a lower-level transport trace was installed for the underlying client.
+    def _should_emit_txrx(self) -> bool:
+        """Decide whether to emit TX/RX from this wrapper."""
+        try:
+            if self.force_diag_emit:
+                return True
+            trace_on = self._transport_trace_installed()
+            if trace_on and not self.emit_synthetic_tx:
+                return False
+            return True
+        except Exception:
+            return True
 
-        When True, avoid emitting duplicate/partial RX from high-level `res.encode()` calls
-        because the transport-level trace will emit canonical frames.
-        """
+    def _emit_diag_with_context(self, text: str, direction: str | None = None, data_bytes: bytes | None = None, fc: int | None = None):
+        if not self.diag_callback or text is None:
+            return
+        ctx = {
+            "host": self.host,
+            "port": self.port,
+            "unit": self.unit,
+        }
+        if direction:
+            ctx["direction"] = direction
+        if fc is not None:
+            ctx["fc"] = fc
+        if data_bytes is not None:
+            try:
+                b = data_bytes if isinstance(data_bytes, (bytes, bytearray)) else bytes(data_bytes)
+                ctx["length"] = len(b)
+                ctx["hex"] = " ".join(f"{c:02X}" for c in b)
+            except Exception:
+                pass
+        try:
+            self.diag_callback(text, ctx)
+        except TypeError:
+            try:
+                self.diag_callback(text)
+            except Exception:
+                pass
+
+    def _transport_trace_installed(self) -> bool:
+        """Return True if a lower-level transport trace was installed for the underlying client."""
         try:
             c = getattr(self, '_client', None)
             if c is None:
@@ -150,11 +188,51 @@ class ModbusClient:
                                     if not getattr(self._client, '_trace_installed', False):
                                         from pymodbus_trace import register_addr_diag
                                         try:
-                                            register_addr_diag(self.host, self.port, self.diag_callback)
+                                            def _addr_diag_wrapper(txt, _diag=self.diag_callback, h=self.host, p=self.port, u=self.unit):
+                                                try:
+                                                    if _diag:
+                                                        try:
+                                                            _diag(txt, {"host": h, "port": p, "unit": u})
+                                                        except TypeError:
+                                                            _diag(txt)
+                                                        except Exception:
+                                                            pass
+                                                except Exception:
+                                                    pass
+
+                                            register_addr_diag(self.host, self.port, _addr_diag_wrapper)
                                         except Exception:
                                             pass
                                 except Exception:
                                     pass
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                # Conservative: ensure a global addr->diag callback is registered
+                # so environments where instance-level wrappers couldn't be attached
+                # still produce TX/RX emits visible to the UI. This is safe because
+                # `register_addr_diag` will simply set the global mapping for host/port.
+                try:
+                    if self._client is not None and self.diag_callback:
+                        try:
+                            from pymodbus_trace import register_addr_diag
+                            def _addr_diag_wrapper_always(txt, _diag=self.diag_callback, h=self.host, p=self.port, u=self.unit):
+                                try:
+                                    if _diag:
+                                        try:
+                                            _diag(txt, {"host": h, "port": p, "unit": u})
+                                        except TypeError:
+                                            _diag(txt)
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                            try:
+                                register_addr_diag(self.host, self.port, _addr_diag_wrapper_always)
                             except Exception:
                                 pass
                         except Exception:
@@ -180,10 +258,7 @@ class ModbusClient:
                             ti = getattr(c, '_trace_installed', False)
                             orig = bool(getattr(c, '_trace_orig', None))
                             accum = bool(getattr(c, '_trace_accum', None))
-                            try:
-                                self.diag_callback(f"TRACE_INFO: trace_installed={ti} _trace_orig={orig} _trace_accum={accum} attrs={' '.join(attrs)}")
-                            except Exception:
-                                pass
+                            # TRACE_INFO emission suppressed to reduce diagnostics noise
                         except Exception:
                             pass
                 except Exception:
@@ -207,7 +282,7 @@ class ModbusClient:
                         else:
                             import re
 
-                            m = re.match(r"(?i)^com(\d+)$", s)
+                            m = re.match(r"^com(\d+)$", s, flags=re.IGNORECASE)
                             if m:
                                 ser_port = f"COM{int(m.group(1))}"
                     else:
@@ -251,11 +326,50 @@ class ModbusClient:
                                         try:
                                             host_var = getattr(self._client, 'host', None) or self.host
                                             port_var = getattr(self._client, 'port', None) or self.port
-                                            register_addr_diag(host_var, port_var, self.diag_callback)
+                                            def _addr_diag_wrapper(txt, _diag=self.diag_callback, h=host_var, p=port_var, u=self.unit):
+                                                try:
+                                                    if _diag:
+                                                        try:
+                                                            _diag(txt, {"host": h, "port": p, "unit": u})
+                                                        except TypeError:
+                                                            _diag(txt)
+                                                        except Exception:
+                                                            pass
+                                                except Exception:
+                                                    pass
+
+                                            register_addr_diag(host_var, port_var, _addr_diag_wrapper)
                                         except Exception:
                                             pass
                                 except Exception:
                                     pass
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                # Conservative: ensure a global addr->diag callback is registered
+                try:
+                    if self._client is not None and self.diag_callback:
+                        try:
+                            from pymodbus_trace import register_addr_diag
+                            host_var = getattr(self._client, 'host', None) or self.host
+                            port_var = getattr(self._client, 'port', None) or self.port
+                            def _addr_diag_wrapper_always(txt, _diag=self.diag_callback, h=host_var, p=port_var, u=self.unit):
+                                try:
+                                    if _diag:
+                                        try:
+                                            _diag(txt, {"host": h, "port": p, "unit": u})
+                                        except TypeError:
+                                            _diag(txt)
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                            try:
+                                register_addr_diag(host_var, port_var, _addr_diag_wrapper_always)
                             except Exception:
                                 pass
                         except Exception:
@@ -281,10 +395,7 @@ class ModbusClient:
                             ti = getattr(c, '_trace_installed', False)
                             orig = bool(getattr(c, '_trace_orig', None))
                             accum = bool(getattr(c, '_trace_accum', None))
-                            try:
-                                self.diag_callback(f"TRACE_INFO: trace_installed={ti} _trace_orig={orig} _trace_accum={accum} attrs={' '.join(attrs)}")
-                            except Exception:
-                                pass
+                            # TRACE_INFO emission suppressed to reduce diagnostics noise
                         except Exception:
                             pass
                 except Exception:
@@ -457,11 +568,9 @@ class ModbusClient:
 
         res = await self._call_method_flexible_async(method, address, count)
         # emit synthetic TX hex for read call so diagnostics show TX even when
-        # transport-layer wrapping fails to capture send bytes. When a
-        # transport-level trace is installed we MUST NOT emit a synthetic TX
-        # here to avoid duplicate TX diagnostics.
+        # transport-layer wrapping fails to capture send bytes.
         try:
-            if self.diag_callback and not self._transport_trace_installed():
+            if self.diag_callback and self._should_emit_txrx():
                 try:
                     func_byte = int(function_code) & 0xFF
                     addr_b = int(address).to_bytes(2, "big")
@@ -514,11 +623,7 @@ class ModbusClient:
                             pdu = bytes([unit_val]) + pdu_pdu
                     except Exception:
                         pdu = bytes([unit_val]) + pdu_pdu
-                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
-                    try:
-                        self.diag_callback(f"TX: | {hex_s} |")
-                    except Exception:
-                        pass
+                    self._emit_diag_with_context(f"TX: | {' '.join(f'{c:02X}' for c in pdu)} |", direction="TX", data_bytes=pdu, fc=function_code)
                 except Exception:
                     pass
         except Exception:
@@ -542,7 +647,7 @@ class ModbusClient:
 
         # emit RX hex if possible (use encode() if available, fallback to data_bytes)
         try:
-            if self.diag_callback:
+            if self.diag_callback and self._should_emit_txrx():
                 data = None
                 try:
                     if hasattr(res, "encode"):
@@ -563,19 +668,13 @@ class ModbusClient:
                         data = data
 
                 if data:
-                    # if transport-level trace is installed, skip high-level RX emit
-                    if not self._transport_trace_installed():
+                    if self._should_emit_txrx():
                         try:
-                            hex_s = " ".join(f"{c:02X}" for c in data)
+                            b = data if isinstance(data, (bytes, bytearray)) else bytes(data)
                         except Exception:
-                            try:
-                                hex_s = " ".join(f"{c:02X}" for c in bytes(data))
-                            except Exception:
-                                hex_s = str(data)
-                        try:
-                            self.diag_callback(f"RX: | {hex_s} |")
-                        except Exception:
-                            pass
+                            b = None
+                        if b:
+                            self._emit_diag_with_context(f"RX: | {' '.join(f'{c:02X}' for c in b)} |", direction="RX", data_bytes=b, fc=function_code)
         except Exception:
             pass
 
@@ -647,9 +746,9 @@ class ModbusClient:
     async def write_coil_async(self, address: int, value: bool):
         if self._client is None:
             await self.connect_async()
-        # emit synthetic TX for writes when no transport-level trace is installed
+        # emit synthetic TX for writes when requested
         try:
-            if self.diag_callback and not self._transport_trace_installed():
+            if self.diag_callback and self._should_emit_txrx():
                 try:
                     func_byte = 5
                     addr_b = int(address).to_bytes(2, "big")
@@ -692,11 +791,7 @@ class ModbusClient:
                             pdu = adu_no_crc
                     else:
                         pdu = bytes([unit_val]) + pdu_pdu
-                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
-                    try:
-                        self.diag_callback(f"TX: | {hex_s} |")
-                    except Exception:
-                        pass
+                    self._emit_diag_with_context(f"TX: | {' '.join(f'{c:02X}' for c in pdu)} |", direction="TX", data_bytes=pdu, fc=5)
                 except Exception:
                     pass
         except Exception:
@@ -706,17 +801,18 @@ class ModbusClient:
             raise AttributeError('Underlying client missing write_coil')
         res = await self._call_method_flexible_any(method, {'address': int(address), 'value': bool(value), 'unit': int(self.unit)})
         try:
-            if self.diag_callback and hasattr(res, 'encode'):
+            if self.diag_callback and self._should_emit_txrx() and hasattr(res, 'encode'):
                 try:
                     data = res.encode()
                 except Exception:
                     data = None
                 if data:
-                    hex_s = ' '.join(f"{c:02X}" for c in data)
                     try:
-                        self.diag_callback(f"RX: | {hex_s} |")
+                        b = data if isinstance(data, (bytes, bytearray)) else bytes(data)
                     except Exception:
-                        pass
+                        b = None
+                    if b:
+                        self._emit_diag_with_context(f"RX: | {' '.join(f'{c:02X}' for c in b)} |", direction="RX", data_bytes=b, fc=5)
         except Exception:
             pass
         return res
@@ -725,7 +821,7 @@ class ModbusClient:
         if self._client is None:
             await self.connect_async()
         try:
-            if self.diag_callback and not self._transport_trace_installed():
+            if self.diag_callback and self._should_emit_txrx():
                 try:
                     func_byte = 15
                     addr_b = int(address).to_bytes(2, "big")
@@ -769,11 +865,7 @@ class ModbusClient:
                             pdu = adu_no_crc
                     else:
                         pdu = bytes([unit_val]) + pdu_pdu
-                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
-                    try:
-                        self.diag_callback(f"TX: | {hex_s} |")
-                    except Exception:
-                        pass
+                    self._emit_diag_with_context(f"TX: | {' '.join(f'{c:02X}' for c in pdu)} |", direction="TX", data_bytes=pdu, fc=15)
                 except Exception:
                     pass
         except Exception:
@@ -783,17 +875,18 @@ class ModbusClient:
             raise AttributeError('Underlying client missing write_coils')
         res = await self._call_method_flexible_any(method, {'address': int(address), 'values': list(values), 'unit': int(self.unit)})
         try:
-            if self.diag_callback and hasattr(res, 'encode'):
+            if self.diag_callback and self._should_emit_txrx() and hasattr(res, 'encode'):
                 try:
                     data = res.encode()
                 except Exception:
                     data = None
                 if data:
-                    hex_s = ' '.join(f"{c:02X}" for c in data)
                     try:
-                        self.diag_callback(f"RX: | {hex_s} |")
+                        b = data if isinstance(data, (bytes, bytearray)) else bytes(data)
                     except Exception:
-                        pass
+                        b = None
+                    if b:
+                        self._emit_diag_with_context(f"RX: | {' '.join(f'{c:02X}' for c in b)} |", direction="RX", data_bytes=b, fc=15)
         except Exception:
             pass
         return res
@@ -802,7 +895,7 @@ class ModbusClient:
         if self._client is None:
             await self.connect_async()
         try:
-            if self.diag_callback and not self._transport_trace_installed():
+            if self.diag_callback and self._should_emit_txrx():
                 try:
                     func_byte = 6
                     addr_b = int(address).to_bytes(2, "big")
@@ -845,11 +938,7 @@ class ModbusClient:
                             pdu = adu_no_crc
                     else:
                         pdu = bytes([unit_val]) + pdu_pdu
-                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
-                    try:
-                        self.diag_callback(f"TX: | {hex_s} |")
-                    except Exception:
-                        pass
+                    self._emit_diag_with_context(f"TX: | {' '.join(f'{c:02X}' for c in pdu)} |", direction="TX", data_bytes=pdu, fc=6)
                 except Exception:
                     pass
         except Exception:
@@ -859,17 +948,18 @@ class ModbusClient:
             raise AttributeError('Underlying client missing write_register')
         res = await self._call_method_flexible_any(method, {'address': int(address), 'value': int(value), 'unit': int(self.unit)})
         try:
-            if self.diag_callback and hasattr(res, 'encode'):
+            if self.diag_callback and self._should_emit_txrx() and hasattr(res, 'encode'):
                 try:
                     data = res.encode()
                 except Exception:
                     data = None
                 if data:
-                    hex_s = ' '.join(f"{c:02X}" for c in data)
                     try:
-                        self.diag_callback(f"RX: | {hex_s} |")
+                        b = data if isinstance(data, (bytes, bytearray)) else bytes(data)
                     except Exception:
-                        pass
+                        b = None
+                    if b:
+                        self._emit_diag_with_context(f"RX: | {' '.join(f'{c:02X}' for c in b)} |", direction="RX", data_bytes=b, fc=6)
         except Exception:
             pass
         return res
@@ -878,7 +968,7 @@ class ModbusClient:
         if self._client is None:
             await self.connect_async()
         try:
-            if self.diag_callback and not self._transport_trace_installed():
+            if self.diag_callback and self._should_emit_txrx():
                 try:
                     func_byte = 16
                     addr_b = int(address).to_bytes(2, "big")
@@ -922,11 +1012,7 @@ class ModbusClient:
                             pdu = adu_no_crc
                     else:
                         pdu = bytes([unit_val]) + pdu_pdu
-                    hex_s = ' '.join(f"{c:02X}" for c in pdu)
-                    try:
-                        self.diag_callback(f"TX: | {hex_s} |")
-                    except Exception:
-                        pass
+                    self._emit_diag_with_context(f"TX: | {' '.join(f'{c:02X}' for c in pdu)} |", direction="TX", data_bytes=pdu, fc=16)
                 except Exception:
                     pass
         except Exception:
@@ -936,17 +1022,18 @@ class ModbusClient:
             raise AttributeError('Underlying client missing write_registers')
         res = await self._call_method_flexible_any(method, {'address': int(address), 'values': list(values), 'unit': int(self.unit)})
         try:
-            if self.diag_callback and hasattr(res, 'encode'):
+            if self.diag_callback and self._should_emit_txrx() and hasattr(res, 'encode'):
                 try:
                     data = res.encode()
                 except Exception:
                     data = None
                 if data:
-                    hex_s = ' '.join(f"{c:02X}" for c in data)
                     try:
-                        self.diag_callback(f"RX: | {hex_s} |")
+                        b = data if isinstance(data, (bytes, bytearray)) else bytes(data)
                     except Exception:
-                        pass
+                        b = None
+                    if b:
+                        self._emit_diag_with_context(f"RX: | {' '.join(f'{c:02X}' for c in b)} |", direction="RX", data_bytes=b, fc=16)
         except Exception:
             pass
         return res

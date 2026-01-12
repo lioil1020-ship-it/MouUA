@@ -695,31 +695,10 @@ def install_trace_for_client(client, diag_callback: Callable[[str], None]):
         client._trace_orig = orig
     except Exception:
         pass
-    # If we did not manage to attach any instance-level wrappers, register
-    # this client's host:port in the global addr registry so the global
-    # monkeypatch can route emits to the provided diag_callback.
+    # Avoid process-wide global monkeypatch: do not register addr fallback if instance wrapping failed.
+    # ensure accumulator present only when instance-level wrappers were attached
     try:
-        if not installed_any:
-            try:
-                chost = getattr(client, 'host', None)
-                cport = getattr(client, 'port', None)
-                if chost is not None and cport is not None:
-                    try:
-                        _GLOBAL_ADDR_DIAG_REG[(str(chost), int(cport))] = diag_callback
-                        addr_registered = True
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-    except Exception:
-        pass
-    # ensure accumulator present
-    try:
-        # mark client as having trace installed when either instance-level
-        # wrappers were attached or we registered a host:port in the global
-        # registry. This ensures callers that avoid emitting synthetic TX/RX
-        # will not duplicate diagnostics when the global fallback is used.
-        if installed_any or addr_registered:
+        if installed_any:
             try:
                 client._trace_accum = {'rx': bytearray(), 'max_len': 8192}
             except Exception:
