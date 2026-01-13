@@ -1,0 +1,1320 @@
+{
+  "type": "Project",
+  "channels": [
+    {
+      "type": "Channel",
+      "text": "Channel3",
+      "driver": "Modbus RTU over TCP",
+      "params": {
+        "adapter": "Default"
+      },
+      "description": "",
+      "children": [
+        {
+          "type": "Device",
+          "text": "Device1",
+          "device_id": 9,
+          "description": "DCB-106",
+          "timing": {
+            "attempts": "1",
+            "connect_attempts": "1",
+            "connect_timeout": "3",
+            "inter_req_delay": "1000",
+            "req_timeout": "2000"
+          },
+          "data_access": {
+            "bit_writes": "Disable",
+            "func_05": "Enable",
+            "func_06": "Enable",
+            "zero_based": "Enable",
+            "zero_based_bit": "Enable"
+          },
+          "encoding": {
+            "bit_order": "Disable",
+            "byte_order": "Enable",
+            "dword_low": "Enable",
+            "treat_long": "Disable",
+            "word_low": "Enable"
+          },
+          "block_sizes": {
+            "hold_regs": 120,
+            "in_coils": 2000,
+            "int_regs": 120,
+            "out_coils": 2000
+          },
+          "ethernet": {
+            "ip": "192.168.2.33",
+            "port": "502",
+            "protocol": "TCP/IP"
+          },
+          "children": [
+            {
+              "type": "Tag",
+              "text": "Module Status Flags",
+              "address": "305121",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Module Warning Flags",
+              "address": "305122",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Module Alarm Flags",
+              "address": "305123",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Module Error Flags",
+              "address": "305124",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "No",
+                "clamp_low": "No",
+                "negate": "No",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "Float",
+                "type": "None",
+                "units": ""
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Module IO Flag",
+              "address": "305125",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "FwUpdateStatus",
+              "address": "305126",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Reserved",
+              "address": "305127",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Charging Voltage (CV)",
+              "address": "305129",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Charging Current (CC)",
+              "address": "305130",
+              "data_type": "Short",
+              "description": "mA",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Discharge Current Limit (DCL)",
+              "address": "305131",
+              "data_type": "Short",
+              "description": "mA",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "End of Discharge Voltage (EDV)",
+              "address": "305132",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Don't care",
+              "address": "305134",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Cell Balance Status",
+              "address": "305135",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Design Capacity (DC)",
+              "address": "305136",
+              "data_type": "Word",
+              "description": "mAh",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Full Charged Capacity (FCC)",
+              "address": "305137",
+              "data_type": "Word",
+              "description": "mAh",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Remaining Capacity (RC)",
+              "address": "305138",
+              "data_type": "Word",
+              "description": "mAh",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "State of Charge (SOC)",
+              "address": "305139",
+              "data_type": "Word",
+              "description": "%",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "State of Health (SOH)",
+              "address": "305140",
+              "data_type": "Word",
+              "description": "%",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Cycle Count",
+              "address": "305141",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Total Voltage",
+              "address": "305145",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Max Cell Voltage",
+              "address": "305146",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Min Cell Voltage",
+              "address": "305147",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Current",
+              "address": "305149",
+              "data_type": "Short",
+              "description": "mA",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Max Cell Temperature",
+              "address": "305153",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Min Cell Temperature",
+              "address": "305154",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Max PCB Parts Temperature",
+              "address": "305156",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cumulative Input Capacity Ah",
+              "address": "305157",
+              "data_type": "Word",
+              "description": "Ah",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100000",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cumulative Output Capacity Ah",
+              "address": "305158",
+              "data_type": "Word",
+              "description": "Ah",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100000",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cumulative Input Capacity kWh",
+              "address": "305159",
+              "data_type": "Word",
+              "description": "kWh",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10000",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cumulative Output Capacity kWh",
+              "address": "305160",
+              "data_type": "Word",
+              "description": "kWh",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "10000",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [0]",
+              "address": "305161",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [1]",
+              "address": "305162",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [2]",
+              "address": "305163",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [3]",
+              "address": "305164",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [4]",
+              "address": "305165",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [5]",
+              "address": "305166",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [6]",
+              "address": "305167",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Temperatures [7]",
+              "address": "305168",
+              "data_type": "Short",
+              "description": "℃",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "100",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [0]",
+              "address": "305169",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [1]",
+              "address": "305170",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [2]",
+              "address": "305171",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [3]",
+              "address": "305172",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [4]",
+              "address": "305173",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [5]",
+              "address": "305174",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [6]",
+              "address": "305175",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [7]",
+              "address": "305176",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [8]",
+              "address": "305177",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [9]",
+              "address": "305178",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [10]",
+              "address": "305179",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [11]",
+              "address": "305180",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [12]",
+              "address": "305181",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Battery Cell Voltages [13]",
+              "address": "305182",
+              "data_type": "Word",
+              "description": "mV",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "0",
+                "clamp_low": "0",
+                "negate": "0",
+                "raw_high": "1000",
+                "raw_low": "0",
+                "scaled_high": "1",
+                "scaled_low": "0",
+                "scaled_type": "Float",
+                "type": "Linear"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Manufacture Date",
+              "address": "305201",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Serial Number",
+              "address": "305202",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Initialized Status",
+              "address": "305203",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Inspection Flag",
+              "address": "305204",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Program Version",
+              "address": "305205",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "DATA Version",
+              "address": "305206",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "EEPROM Version",
+              "address": "305207",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "PCB Version",
+              "address": "305208",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Module year/month",
+              "address": "305226",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Module day/hour",
+              "address": "305227",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Module minute/second",
+              "address": "305228",
+              "data_type": "Word",
+              "description": "",
+              "scan_rate": "10",
+              "access": "Read Only",
+              "scaling": {
+                "clamp_high": "",
+                "clamp_low": "",
+                "negate": "",
+                "raw_high": "",
+                "raw_low": "",
+                "scaled_high": "",
+                "scaled_low": "",
+                "scaled_type": "",
+                "type": "None"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

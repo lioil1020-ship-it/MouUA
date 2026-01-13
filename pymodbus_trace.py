@@ -121,26 +121,27 @@ def install_trace_for_client(client, diag_callback: Callable[[str], None]):
         while True:
             if not buf:
                 break
-            # MBAP / TCP
-            if mode == 'tcp' or mode == 'overtcp':
-                if len(buf) < 7:
-                    break
-                # length is bytes 4-5
-                length = (buf[4] << 8) | buf[5]
-                total = 6 + int(length)
-                if len(buf) < total:
-                    break
-                frame = bytes(buf[:total])
-                try:
-                    _emit('RX', frame)
-                except Exception:
-                    pass
-                buf = buf[total:]
-                emitted_any = True
-                continue
+                    # MBAP / TCP (TCP uses MBAP length-field framing)
+                    if mode == 'tcp':
+                        if len(buf) < 7:
+                            break
+                        # length is bytes 4-5
+                        length = (buf[4] << 8) | buf[5]
+                        total = 6 + int(length)
+                        if len(buf) < total:
+                            break
+                        frame = bytes(buf[:total])
+                        try:
+                            _emit('RX', frame)
+                        except Exception:
+                            pass
+                        buf = buf[total:]
+                        emitted_any = True
+                        continue
 
             # RTU: try CRC-based frame boundary detection
-            if mode == 'rtu' or mode == 'serial':
+            # Treat 'overtcp' as RTU framing over a TCP transport (no MBAP)
+            if mode == 'rtu' or mode == 'serial' or mode == 'overtcp':
                 # need at least unit(1) + func(1) + crc(2)
                 if len(buf) < 4:
                     break

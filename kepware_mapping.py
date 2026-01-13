@@ -122,7 +122,49 @@ def map_kepware_to_pymodbus(driver_name: str, ch_params: dict, encoding: dict, b
 
     if drv_s == "Modbus RTU over TCP":
         mode = "overtcp"
-        # keep TCP host/port
+        # Attempt to provide RTU framer and sensible timeouts/retries so
+        # ModbusTcpClient can be constructed for RTU-over-TCP transports.
+        try:
+            # map request timeout (ms -> seconds) if provided on device timing
+            req_ms = None
+            if isinstance(device_timing, dict) and device_timing.get('req_timeout') is not None:
+                try:
+                    req_ms = int(device_timing.get('req_timeout'))
+                except Exception:
+                    try:
+                        req_ms = int(float(device_timing.get('req_timeout')))
+                    except Exception:
+                        req_ms = None
+            if req_ms is not None:
+                client_params['timeout'] = max(0.01, float(req_ms) / 1000.0)
+        except Exception:
+            pass
+        try:
+            # Ask ModbusClient to emit synthetic TX diagnostics when trace may not
+            # capture raw send bytes. This helps the UI show TX for RTU-over-TCP.
+            client_params.setdefault('emit_synthetic_tx', True)
+        except Exception:
+            pass
+        try:
+            client_params['retries'] = int(device_timing.get('attempts', 1)) if isinstance(device_timing, dict) else 1
+        except Exception:
+            client_params['retries'] = 1
+
+        # try to attach an RTU framer class where available so the TCP client
+        # will frame ADUs as RTU (unit + pdu + CRC) rather than MBAP.
+        try:
+            try:
+                from pymodbus.framer.rtu_framer import ModbusRtuFramer as _ModbusRtuFramer
+                client_params['framer'] = _ModbusRtuFramer
+            except Exception:
+                try:
+                    from pymodbus.transaction import ModbusRtuFramer as _ModbusRtuFramer
+                    client_params['framer'] = _ModbusRtuFramer
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         return mode, host_local, port_local, client_params
 
     # default: Modbus TCP/IP Ethernet and variants

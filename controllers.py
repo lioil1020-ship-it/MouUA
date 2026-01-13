@@ -1202,7 +1202,17 @@ class AppController:
                 except Exception:
                     mode_s = "tcp"
 
-                if mode_s == "rtu":
+                # treat 'overtcp' as RTU framing when emitting synthetic TX
+                is_rtu_like = False
+                try:
+                    if mode_s in ("rtu", "overtcp"):
+                        is_rtu_like = True
+                    elif isinstance(client_params, dict) and (client_params.get('framer') is not None or client_params.get('rtu_over_tcp')):
+                        is_rtu_like = True
+                except Exception:
+                    is_rtu_like = False
+
+                if is_rtu_like:
                     # Build RTU ADU: unit + PDU + CRC16 (little-endian)
                     try:
                         adu = bytes([int(unit)]) + pdu_tx
