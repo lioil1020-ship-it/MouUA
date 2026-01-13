@@ -164,6 +164,29 @@ class OPCUADialog(QDialog):
         # 初始初始化
         self._apply_defaults(initial)
         self._connect_endpoint_updaters()
+        # Ensure the network adapter combo shows 'Default' when dialog opens
+        try:
+            na = self.settings_form.fields.get('network_adapter')
+            if na is not None:
+                try:
+                    # prefer an item with empty data, otherwise look for text 'Default'
+                    idx = na.findData('') if hasattr(na, 'findData') else -1
+                except Exception:
+                    idx = -1
+                if idx is None or idx < 0:
+                    try:
+                        idx = na.findText('Default') if hasattr(na, 'findText') else -1
+                    except Exception:
+                        idx = -1
+                try:
+                    if idx is not None and idx >= 0:
+                        na.setCurrentIndex(idx)
+                        if hasattr(self, '_adapter_ip_hidden'):
+                            self._adapter_ip_hidden.setText('')
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self._setup_auth_visibility()
         self._update_endpoint_label()
 
@@ -291,6 +314,11 @@ class OPCUADialog(QDialog):
                 na_widget.clear()
             except Exception:
                 pass
+            # Ensure a "Default" option exists (keeps behavior consistent with Channel dialog)
+            try:
+                na_widget.addItem("Default", "")
+            except Exception:
+                pass
             infos = psutil.net_if_addrs()
             for ifname, addrs in infos.items():
                 for a in addrs:
@@ -325,6 +353,13 @@ class OPCUADialog(QDialog):
                     if idx >= 0:
                         na_widget.setCurrentIndex(idx)
                         self._adapter_ip_hidden.setText(str(target))
+                else:
+                    # if no saved target, default to the first item (we insert "Default" at top)
+                    try:
+                        if na_widget.count() > 0:
+                            na_widget.setCurrentIndex(0)
+                    except Exception:
+                        pass
             except Exception:
                 pass
         except Exception:
