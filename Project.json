@@ -1,0 +1,157 @@
+{
+  "type": "Project",
+  "channels": [
+    {
+      "type": "Channel",
+      "text": "Channel1",
+      "general": {
+        "channel_name": "Channel1",
+        "description": ""
+      },
+      "driver": {
+        "type": "Modbus TCP/IP Ethernet",
+        "params": {
+          "ip": "192.168.11.10",
+          "port": "502",
+          "protocol": "TCP/IP"
+        }
+      },
+      "communication": {
+        "network_adapter": "乙太網路 (192.168.1.101)"
+      },
+      "children": [
+        {
+          "type": "Device",
+          "text": "Device1",
+          "general": {
+            "name": "Device1",
+            "description": "",
+            "device_id": 1
+          },
+          "timing": {
+            "connect_timeout": "3",
+            "request_timeout": "1000",
+            "attempts_before_timeout": "1",
+            "inter_request_delay": "0"
+          },
+          "data_access": {
+            "zero_based": 0,
+            "zero_based_bit": 1,
+            "bit_writes": 0,
+            "func_06": 1,
+            "func_05": 1
+          },
+          "encoding": {
+            "byte_order": 1,
+            "word_order": 1,
+            "dword_order": 1,
+            "bit_order": 0,
+            "treat_longs_as_decimals": 0
+          },
+          "block_sizes": {
+            "out_coils": 2000,
+            "in_coils": 2000,
+            "int_regs": 120,
+            "hold_regs": 120
+          },
+          "children": [
+            {
+              "type": "Tag",
+              "text": "MF",
+              "general": {
+                "name": "MF",
+                "description": "",
+                "data_type": "Float(Array)",
+                "access": "Read/Write",
+                "address": "400095 [25]",
+                "scan_rate": "10"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag1",
+              "general": {
+                "name": "Tag1",
+                "description": "",
+                "data_type": "Float",
+                "access": "Read/Write",
+                "address": "400095",
+                "scan_rate": "10"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag2",
+              "general": {
+                "name": "Tag2",
+                "description": "",
+                "data_type": "Word",
+                "access": "Read Only",
+                "address": "300093",
+                "scan_rate": "10"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag3",
+              "general": {
+                "name": "Tag3",
+                "description": "",
+                "data_type": "Boolean",
+                "access": "Read/Write",
+                "address": "000103",
+                "scan_rate": "10"
+              }
+            },
+            {
+              "type": "Tag",
+              "text": "Tag4",
+              "general": {
+                "name": "Tag4",
+                "description": "",
+                "data_type": "Boolean",
+                "access": "Read Only",
+                "address": "100108",
+                "scan_rate": "10"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "opcua_settings": {
+    "general": {
+      "application_name": "ModUA",
+      "host_name": "ModUA",
+      "namespace": "ModUA",
+      "port": "48480",
+      "product_uri": "opc.tcp://192.168.1.101:48480",
+      "max_sessions": "4096",
+      "publish_interval": "1000",
+      "network_adapter": "乙太網路 (192.168.1.101)"
+    },
+    "authentication": {
+      "authentication": "Anonymous"
+    },
+    "security_policies": {
+      "policy_none": 1,
+      "policy_sign_aes128": 0,
+      "policy_sign_aes256": 0,
+      "policy_sign_basic256sha256": 0,
+      "policy_encrypt_aes128": 0,
+      "policy_encrypt_aes256": 0,
+      "policy_encrypt_basic256sha256": 0
+    },
+    "certificate": {
+      "auto_generate": 1,
+      "common_name": "ModUA@lioil",
+      "organization": "Organization",
+      "organization_unit": "Unit",
+      "locality": "Locality",
+      "state": "State",
+      "country": "tw",
+      "cert_validity": "20"
+    }
+  }
+}

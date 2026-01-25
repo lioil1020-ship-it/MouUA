@@ -1,0 +1,28 @@
+共通: column 0: 節點類型（UserRole，值為 "Channel"/"Device"/"Group"/"Tag" 等）。
+
+Channel
+col 1: Description（頻道描述）
+col 2: Driver（可為 dict 或 string；若 dict 則含 type 與 params，例如 { "type": "Modbus TCP/IP Ethernet", "params": {...} }）
+col 3: Communication（扁平通訊參數 dict，例如 com/baud/data_bits/parity/stop/flow/ip/port/adapter/network_adapter 等）
+col 9: 完整 driver 結構（OrderedDict {"type","params"}，保留以維持向後相容性）
+
+Device
+col 1: Description（裝置描述）
+col 2: Device ID / Unit ID
+col 3: Timing（canonical dict；儲存已正規化的 keys，如 connect_timeout, connect_attempts, request_timeout, attempts_before_timeout, inter_request_delay）
+col 4: Data Access（dict，欄位如 zero_based, zero_based_bit, bit_writes, func_06, func_05；值已 normalize 為 0/1 或 Enable/Disable）
+col 5: Encoding（dict，欄位如 byte_order, word_order, dword_order, bit_order, treat_longs_as_decimals；值已 normalize 為 0/1 或 Enable/Disable）
+col 6: Block Sizes（dict，例如 out_coils, in_coils, int_regs, hold_regs）
+
+Group
+col 0: Group（節點類型，UserRole 值為 "Group"）
+col 1: Description（Group 描述，UI 與多處程式以 data(1) 存/讀；無參數時可為空）
+
+Tag
+col 1: Description（Tag 描述）
+col 2: Data Type（例如 Word, Boolean, Float, 或含 (Array) 的型別，如 Word(Array), Boolean(Array) 等）
+col 3: Client Access（存取權限，值為 "Read/Write" 或 "Read Only"）
+col 4: Address（字串，會做規則化/零補等處理；例如 "400000", "000000" 等）
+col 5: Scan Rate（integer，單位 ms；預設 10）
+col 6: Scaling（dict，含 type, raw_low, raw_high, scaled_type, scaled_low, scaled_high, clamp_low, clamp_high, negate, units；無時可為空）
+col 7: Metadata（由 controller 衍生的 dict：{ 'addrnum': int|None, 'is_array': bool, 'array_size': int }，用於排序/匯出/陣列處理）

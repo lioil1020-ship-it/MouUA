@@ -1,0 +1,10 @@
+
+__pycache__/
+.venv/
+archived_py/
+build/
+dist/
+*.pyc
+*.csv
+*.ico
+.tmp/

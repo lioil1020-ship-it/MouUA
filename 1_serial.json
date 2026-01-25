@@ -1,0 +1,152 @@
+{
+  "type": "Project",
+  "channels": [
+    {
+      "type": "Channel",
+      "text": "Channel1",
+      "general": {
+        "channel_name": "Channel1",
+        "description": ""
+      },
+      "driver": {
+        "type": "Modbus RTU Serial",
+        "params": {}
+      },
+      "communication": {
+        "com": "COM4",
+        "baud": "9600",
+        "data_bits": "8",
+        "parity": "None",
+        "stop": "1",
+        "flow": "None"
+      },
+      "children": [
+        {
+          "type": "Device",
+          "text": "Device1",
+          "general": {
+            "name": "Device1",
+            "description": "",
+            "device_id": 1
+          },
+          "timing": {
+            "request_timeout": "1000",
+            "attempts_before_timeout": "1",
+            "inter_request_delay": "0"
+          },
+          "data_access": {
+            "zero_based": 0,
+            "zero_based_bit": 1,
+            "bit_writes": 0,
+            "func_06": 1,
+            "func_05": 1
+          },
+          "encoding": {
+            "byte_order": 1,
+            "word_low": 1,
+            "dword_low": 1,
+            "bit_order": 0,
+            "treat_long": 0
+          },
+          "block_sizes": {
+            "out_coils": 2000,
+            "in_coils": 2000,
+            "int_regs": 120,
+            "hold_regs": 120
+          },
+          "children": [
+            {
+              "type": "Group",
+              "text": "Group1",
+              "description": "",
+              "children": [
+                {
+                  "type": "Tag",
+                  "text": "Tag1",
+                  "general": {
+                    "name": "Tag1",
+                    "description": "",
+                    "data_type": "Word",
+                    "access": "Read/Write",
+                    "address": "400000",
+                    "scan_rate": "10"
+                  },
+                  "scaling": {
+                    "type": "Linear",
+                    "raw_low": "0",
+                    "raw_high": "1000",
+                    "scaled_type": "Float",
+                    "scaled_low": "0.0",
+                    "scaled_high": "100.0",
+                    "clamp_low": "No",
+                    "clamp_high": "No",
+                    "negate": "No",
+                    "units": ""
+                  }
+                }
+              ]
+            },
+            {
+              "type": "Tag",
+              "text": "Tag1",
+              "general": {
+                "name": "Tag1",
+                "description": "",
+                "data_type": "Word",
+                "access": "Read Only",
+                "address": "300000",
+                "scan_rate": "10"
+              },
+              "scaling": {
+                "type": "Linear",
+                "raw_low": "0",
+                "raw_high": "1000",
+                "scaled_type": "Double",
+                "scaled_low": "0.0",
+                "scaled_high": "100.0",
+                "clamp_low": "No",
+                "clamp_high": "No",
+                "negate": "No",
+                "units": ""
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "opcua_settings": {
+    "general": {
+      "application_name": "ModUA",
+      "host_name": "ModUA",
+      "namespace": "ModUA",
+      "port": "48480",
+      "product_uri": "opc.tcp://192.168.1.101:48480",
+      "max_sessions": "4096",
+      "publish_interval": "1000",
+      "network_adapter": "乙太網路 (192.168.1.101)"
+    },
+    "authentication": {
+      "authentication": "Anonymous"
+    },
+    "security_policies": {
+      "policy_none": 1,
+      "policy_sign_aes128": 0,
+      "policy_sign_aes256": 0,
+      "policy_sign_basic256sha256": 0,
+      "policy_encrypt_aes128": 0,
+      "policy_encrypt_aes256": 0,
+      "policy_encrypt_basic256sha256": 0
+    },
+    "certificate": {
+      "auto_generate": 1,
+      "common_name": "ModUA@lioil",
+      "organization": "Organization",
+      "organization_unit": "Unit",
+      "locality": "Locality",
+      "state": "State",
+      "country": "tw",
+      "cert_validity": "20"
+    }
+  }
+}
