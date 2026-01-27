@@ -68,52 +68,59 @@
               }
             },
             {
-              "type": "Tag",
-              "text": "Tag1",
-              "general": {
-                "name": "Tag1",
-                "description": "",
-                "data_type": "Float",
-                "access": "Read/Write",
-                "address": "400095",
-                "scan_rate": "10"
-              }
-            },
-            {
-              "type": "Tag",
-              "text": "Tag2",
-              "general": {
-                "name": "Tag2",
-                "description": "",
-                "data_type": "Word",
-                "access": "Read Only",
-                "address": "300093",
-                "scan_rate": "10"
-              }
-            },
-            {
-              "type": "Tag",
-              "text": "Tag3",
-              "general": {
-                "name": "Tag3",
-                "description": "",
-                "data_type": "Boolean",
-                "access": "Read/Write",
-                "address": "000103",
-                "scan_rate": "10"
-              }
-            },
-            {
-              "type": "Tag",
-              "text": "Tag4",
-              "general": {
-                "name": "Tag4",
-                "description": "",
-                "data_type": "Boolean",
-                "access": "Read Only",
-                "address": "100108",
-                "scan_rate": "10"
-              }
+              "type": "Group",
+              "text": "Group1",
+              "description": "",
+              "children": [
+                {
+                  "type": "Tag",
+                  "text": "Tag1",
+                  "general": {
+                    "name": "Tag1",
+                    "description": "",
+                    "data_type": "Float",
+                    "access": "Read/Write",
+                    "address": "400095",
+                    "scan_rate": "10"
+                  }
+                },
+                {
+                  "type": "Tag",
+                  "text": "Tag2",
+                  "general": {
+                    "name": "Tag2",
+                    "description": "",
+                    "data_type": "Word",
+                    "access": "Read Only",
+                    "address": "300093",
+                    "scan_rate": "10"
+                  }
+                },
+                {
+                  "type": "Tag",
+                  "text": "Tag3",
+                  "general": {
+                    "name": "Tag3",
+                    "description": "",
+                    "data_type": "Boolean",
+                    "access": "Read/Write",
+                    "address": "000103",
+                    "scan_rate": "10"
+                  }
+                },
+                {
+                  "type": "Tag",
+                  "text": "Tag4",
+                  "general": {
+                    "name": "Tag4",
+                    "description": "",
+                    "data_type": "Boolean",
+                    "access": "Read Only",
+                    "address": "100108",
+                    "scan_rate": "10"
+                  }
+                }
+              ]
             }
           ]
         }
@@ -123,16 +130,17 @@
   "opcua_settings": {
     "general": {
       "application_name": "ModUA",
-      "host_name": "ModUA",
       "namespace": "ModUA",
-      "port": "48480",
-      "product_uri": "opc.tcp://192.168.1.101:48480",
+      "port": "4848",
+      "product_uri": "opc.tcp://192.168.1.101:4848",
       "max_sessions": "4096",
       "publish_interval": "1000",
       "network_adapter": "乙太網路 (192.168.1.101)"
     },
     "authentication": {
-      "authentication": "Anonymous"
+      "authentication": "Anonymous",
+      "username": "",
+      "password": ""
     },
     "security_policies": {
       "policy_none": 1,
