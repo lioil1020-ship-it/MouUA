@@ -188,23 +188,37 @@ class AppController:
         timing = general.get('timing') or data.get('timing')
         if timing and isinstance(timing, dict):
             try:
-                # Normalize timing keys to canonical names
-                nt = {}
-                for old_key, new_key in [
-                    ('connect_timeout', 'connect_timeout'),
-                    ('connect_timeout_ms', 'connect_timeout'),
-                    ('conn_timeout', 'connect_timeout'),
-                    ('request_timeout', 'request_timeout'),
-                    ('req_timeout', 'request_timeout'),
-                    ('request_timeout_ms', 'request_timeout'),
-                ]:
+                # Normalize timing keys to canonical names but preserve any
+                # additional timing fields (e.g. 'attempts', 'inter_req_delay').
+                nt = dict(timing)  # start with a shallow copy to preserve extras
+                # mapping of known legacy keys -> canonical keys
+                mapping = {
+                    'connect_timeout': 'connect_timeout',
+                    'connect_timeout_ms': 'connect_timeout',
+                    'conn_timeout': 'connect_timeout',
+                    'request_timeout': 'request_timeout',
+                    'req_timeout': 'request_timeout',
+                    'request_timeout_ms': 'request_timeout',
+                }
+                # Additional mappings for runtime names expected by ModbusMonitor
+                extra_map = {
+                    'attempts': 'attempts_before_timeout',
+                    'attempts_before_timeout': 'attempts_before_timeout',
+                    'inter_req_delay': 'inter_request_delay',
+                    'inter_request_delay': 'inter_request_delay',
+                }
+                # Apply mapping: copy value to canonical name, remove legacy key when renamed
+                for old_key, new_key in mapping.items():
                     if old_key in timing:
                         nt[new_key] = timing[old_key]
-                
-                if nt:
-                    item.setData(3, Qt.ItemDataRole.UserRole, nt)
-                else:
-                    item.setData(3, Qt.ItemDataRole.UserRole, timing)
+                        # keep the original key as well so UI form fields
+                        # that expect legacy keys (e.g. 'req_timeout') can still
+                        # load values via FormBuilder.set_values().
+                for old_key, new_key in extra_map.items():
+                    if old_key in timing:
+                        nt[new_key] = timing[old_key]
+
+                item.setData(3, Qt.ItemDataRole.UserRole, nt)
             except Exception as e:
                 logger.error(f"Error setting timing: {e}")
         
