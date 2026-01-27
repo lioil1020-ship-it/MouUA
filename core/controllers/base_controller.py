@@ -1503,7 +1503,7 @@ class AppController:
 
                 opc_od = _OD()
                 # Build general section: prefer network_adapter string and omit separate network_adapter_ip
-                gen_keys = ['application_name', 'host_name', 'namespace', 'port', 'product_uri', 'max_sessions', 'publish_interval']
+                gen_keys = ['application_name', 'namespace', 'port', 'product_uri', 'max_sessions', 'publish_interval']
                 gen_od = _OD()
                 for k in gen_keys:
                     v = pick(opc, k)

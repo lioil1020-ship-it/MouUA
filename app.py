@@ -659,7 +659,6 @@ class IoTApp(QMainWindow):
             nested = {
                 'general': {
                     'application_name': gen.get('application_name') or gen.get('application_Name') or '',
-                    'host_name': gen.get('host_name', ''),
                     'namespace': gen.get('namespace', ''),
                     'port': gen.get('port', ''),
                     'product_uri': gen.get('product_uri', ''),

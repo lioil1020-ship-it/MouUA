@@ -36,7 +36,7 @@ class OPCUADialog(QDialog):
         self.settings_form.layout.setSpacing(SPACING)
         self.settings_form.setMaximumWidth(FORM_MAX_WIDTH)
         self.settings_form.add_field('application_Name', 'Application Name')
-        self.settings_form.add_field('host_name', 'Host Name')
+            # removed host_name field: network adapter / adapter IP used instead
         self.settings_form.add_field('namespace', 'Namespace')
         self.settings_form.add_field('port', 'Port')
         self.settings_form.add_field('product_uri', 'Product URI(End Point)')
@@ -215,10 +215,10 @@ class OPCUADialog(QDialog):
             pass
 
     def _update_endpoint_label(self):
-        # 即時計算並顯示 opc.tcp 連線字串，優先使用選取的 network adapter IP。
+        # 即時計算並顯示 opc.tcp 連線字串，優先使用選取的 network adapter IP 或自動偵測
         try:
             vals = self.settings_form.get_values()
-            # prefer selected network adapter IP; fall back to host_name or auto-detect
+            # prefer selected network adapter IP
             host = ''
             try:
                 na_widget = self.settings_form.fields.get('network_adapter')
@@ -229,9 +229,8 @@ class OPCUADialog(QDialog):
                 if not host:
                     host = (vals.get('network_adapter_ip') or '').strip()
             except Exception:
-                host = ''
-            if not host:
-                host = (vals.get('host_name') or '').strip()
+                host = (vals.get('network_adapter_ip') or '').strip()
+
             port = (vals.get('port') or '').strip()
 
             def _get_ip():
@@ -259,11 +258,12 @@ class OPCUADialog(QDialog):
 
             if hasattr(self, 'endpoint_display'):
                 self.endpoint_display.setText(f"opc.tcp://{h}:{port if port else '48480'}")
-        except: pass
+        except Exception:
+            pass
 
     def _connect_endpoint_updaters(self):
         # update when port changes or network adapter selection changes
-        for k in ['host_name', 'port', 'network_adapter']:
+        for k in ['port', 'network_adapter']:
             w = self.settings_form.fields.get(k)
             try:
                 if hasattr(w, 'textChanged'):
@@ -364,7 +364,7 @@ class OPCUADialog(QDialog):
 
     def _apply_defaults(self, initial):
         defaults = {
-            'application_Name':'ModUA','host_name': 'ModUA', 'namespace': 'ModUA', 'port': '48480',
+            'application_Name': 'ModUA', 'namespace': 'ModUA', 'port': '48480',
             'policy_none': True, 'policy_sign_aes128': False, 'policy_sign_aes256': False,
             'policy_sign_basic256sha256': False, 'policy_encrypt_aes128': False,
             'policy_encrypt_aes256': False, 'policy_encrypt_basic256sha256': False,
@@ -480,7 +480,6 @@ class OPCUADialog(QDialog):
         nested = {
             'general': {
                 'application_name': app_name,
-                'host_name': vals.get('host_name', ''),
                 'namespace': vals.get('namespace', ''),
                 'port': vals.get('port', ''),
                 'product_uri': vals.get('product_uri', ''),
