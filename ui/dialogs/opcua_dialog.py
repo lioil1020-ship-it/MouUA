@@ -401,10 +401,45 @@ class OPCUADialog(QDialog):
         if not data:
             return
         try:
+            # Some callers provide a combined {**flat, **nested} structure where
+            # nested sections like 'authentication' or 'general' are dicts.
+            # FormBuilder.set_values expects flat key->value pairs. Build a
+            # flattened view that prefers explicit top-level scalar keys but
+            # will pull values from nested sections when present.
+            flat = {}
+            try:
+                # copy non-dict top-level entries first
+                for k, v in (data.items() if isinstance(data, dict) else []):
+                    if not isinstance(v, dict):
+                        flat[k] = v
+            except Exception:
+                pass
+
+            # Pull from known nested sections to ensure fields like
+            # authentication/username/password/network_adapter_ip are available
+            for sec in ('general', 'authentication', 'security_policies', 'certificate'):
+                try:
+                    sub = data.get(sec) if isinstance(data.get(sec), dict) else None
+                    if isinstance(sub, dict):
+                        for k, v in sub.items():
+                            # do not overwrite explicit top-level scalar keys
+                            if k not in flat:
+                                flat[k] = v
+                except Exception:
+                    pass
+
+            # Fallback: if nothing found, use original data
+            to_apply = flat if flat else data
+
             # reuse set_values for most fields
-            self.set_values(data)
+            self.set_values(to_apply)
+
             # ensure network_adapter_ip hidden field is set if provided
-            na_ip = data.get('network_adapter_ip') or data.get('network_adapter_ip', '')
+            na_ip = None
+            try:
+                na_ip = to_apply.get('network_adapter_ip') if isinstance(to_apply, dict) else None
+            except Exception:
+                na_ip = None
             try:
                 if hasattr(self, '_adapter_ip_hidden') and na_ip is not None:
                     self._adapter_ip_hidden.setText(str(na_ip))
