@@ -1554,13 +1554,22 @@ class AppController:
                 except Exception:
                     pass
 
+                # Always emit explicit authentication structure so import/load
+                # round-trips the user's choice. Use empty strings for missing
+                # username/password to avoid losing fields during import.
                 auth_od = _OD()
-                if auth_type is not None:
-                    auth_od['authentication'] = auth_type
-                if auth_user is not None:
-                    auth_od['username'] = auth_user
-                if auth_pass is not None:
-                    auth_od['password'] = auth_pass
+                try:
+                    auth_od['authentication'] = str(auth_type) if auth_type is not None else 'Anonymous'
+                except Exception:
+                    auth_od['authentication'] = 'Anonymous'
+                try:
+                    auth_od['username'] = '' if auth_user is None else str(auth_user)
+                except Exception:
+                    auth_od['username'] = ''
+                try:
+                    auth_od['password'] = '' if auth_pass is None else str(auth_pass)
+                except Exception:
+                    auth_od['password'] = ''
                 opc_od['authentication'] = auth_od
 
                 sp_keys = ['policy_none', 'policy_sign_aes128', 'policy_sign_aes256', 'policy_sign_basic256sha256', 'policy_encrypt_aes128', 'policy_encrypt_aes256', 'policy_encrypt_basic256sha256']
