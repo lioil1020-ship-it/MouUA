@@ -1,3 +1,31 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# Editor directories
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+
+# Build/dist
+build/
+dist/
+*.egg-info/
+
+# Ignore Windows device file accidentally added to repo
+nul
+
+# Python local files
+*.log
+.pytest_cache/
 
 __pycache__/
 .venv/
