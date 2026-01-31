@@ -131,7 +131,6 @@ class IoTApp(QMainWindow):
 
         self.runtime_signals = RuntimeMonitorSignals()
 
-        # 初始化核心模块
         try:
             self.controller = AppController(self)
             self.clipboard_manager = ClipboardManager(self)
@@ -924,19 +923,6 @@ class IoTApp(QMainWindow):
                     if self.opc_server:
                         try:
                             self.opc_server.load_all_tags()
-
-                            # Start periodic sync
-                            if not getattr(self, "_opc_update_timer", None):
-                                from PyQt6.QtCore import QTimer
-
-                                self._opc_update_timer = QTimer(self)
-                                self._opc_update_timer.setInterval(200)
-                                self._opc_update_timer.timeout.connect(
-                                    lambda: self.opc_server.sync_values()
-                                    if self.opc_server
-                                    else None
-                                )
-                                self._opc_update_timer.start()
                         except Exception as e:
                             opc_logger.error(
                                 f"Error loading OPC tags: {e}\n{traceback.format_exc()}"
@@ -949,86 +935,23 @@ class IoTApp(QMainWindow):
             # Launch in background thread
             opc_thread = threading.Thread(target=_init_opc_in_background, daemon=True)
             opc_thread.start()
+
+            # Start periodic sync timer in main thread after server starts
+            from PyQt6.QtCore import QTimer
+
+            if not getattr(self, "_opc_update_timer", None):
+                self._opc_update_timer = QTimer(self)
+                self._opc_update_timer.setInterval(200)
+                self._opc_update_timer.timeout.connect(
+                    lambda: self.opc_server.sync_values() if self.opc_server else None
+                )
+                self._opc_update_timer.start()
         except Exception as e:
             import traceback
 
             self._write_opc_trace(
                 f"Failed to start OPC initialization: {e}\n{traceback.format_exc()}"
             )
-
-            # canonicalize into flat+nested structure expected by OPCUADialog.load_data/get_data
-            try:
-                gen = (
-                    settings.get("general")
-                    if isinstance(settings.get("general"), dict)
-                    else {}
-                )
-            except Exception:
-                gen = {}
-            try:
-                auth = (
-                    settings.get("authentication")
-                    if isinstance(settings.get("authentication"), dict)
-                    else {}
-                )
-            except Exception:
-                auth = {}
-            try:
-                sec = (
-                    settings.get("security_policies")
-                    if isinstance(settings.get("security_policies"), dict)
-                    else {}
-                )
-            except Exception:
-                sec = {}
-            try:
-                cert = (
-                    settings.get("certificate")
-                    if isinstance(settings.get("certificate"), dict)
-                    else {}
-                )
-            except Exception:
-                cert = {}
-
-            nested = {
-                "general": {
-                    "application_name": gen.get("application_name")
-                    or gen.get("application_Name")
-                    or "",
-                    "namespace": gen.get("namespace", ""),
-                    "port": gen.get("port", ""),
-                    "product_uri": gen.get("product_uri", ""),
-                    "network_adapter": gen.get("network_adapter", ""),
-                    "network_adapter_ip": gen.get("network_adapter_ip", ""),
-                    "max_sessions": gen.get("max_sessions", ""),
-                    "publish_interval": gen.get("publish_interval", ""),
-                },
-                "authentication": {
-                    "authentication": auth.get("authentication")
-                    or auth.get("type")
-                    or "Anonymous",
-                    "username": auth.get("username", ""),
-                    "password": auth.get("password", ""),
-                },
-                "security_policies": {
-                    k: bool(v)
-                    for k, v in (sec.items() if isinstance(sec, dict) else {})
-                },
-                "certificate": {
-                    **cert,
-                    "auto_generate": bool(cert.get("auto_generate", True)),
-                    "common_name": cert.get("common_name", ""),
-                },
-            }
-
-            flat = {}
-            try:
-                flat.update(nested["general"])
-                flat.update(nested["authentication"])
-                flat.update(nested["security_policies"])
-                flat.update(nested["certificate"])
-            except Exception:
-                pass
 
             # provide aliases expected by OPCUADialog/FormBuilder
             try:
@@ -1967,82 +1890,35 @@ class IoTApp(QMainWindow):
             pass
 
     def on_delete_item(self, item):
-        # 刪除指定的樹狀節點。
-        #
-        # UI 行為：詢問使用者確認，若確認則將節點從其 parent 移除，並嘗試刷新右側表格顯示。
         if item is None:
             return
-        try:
-            label = item.text(0)
-        except Exception:
-            label = ""
+
+        label = item.text(0)
         if (
             QMessageBox.question(self, "Delete", f"確定刪除 '{label}'?")
             == QMessageBox.StandardButton.Yes
         ):
-            try:
-                parent = item.parent() or self.tree.invisibleRootItem()
-                parent.removeChild(item)
-            except Exception:
-                pass
-            try:
-                self.update_right_table(parent, 0)
-            except Exception:
-                pass
+            parent = item.parent() or self.tree.invisibleRootItem()
+            parent.removeChild(item)
+            self.update_right_table(parent, 0)
 
     def on_copy_item(self, item):
-        # 將指定節點複製到內建 clipboard-manager。
-        #
-        # 此方法僅為 UI 操作層面的複製；實際貼上需由 `on_paste_item` 處理。
-        try:
+        if self.clipboard_manager:
             self.clipboard_manager.copy(item)
-        except Exception:
-            pass
 
     def on_cut_item(self, item):
-        # 剪下指定節點並將其放入 clipboard；若有 parent 回傳則刷新對應顯示。
-
-        parent = self.clipboard_manager.cut(item)
-        if parent:
-            try:
+        if self.clipboard_manager:
+            parent = self.clipboard_manager.cut(item)
+            if parent:
                 self.update_right_table(parent, 0)
-            except Exception:
-                pass
 
     def on_paste_item(self, target_item):
-        # 將 clipboard 中的項目貼上到 `target_item`。貼上成功後會刷新父節點的表格顯示。
-        #
-        # 參數：
-        # - target_item: 如果為 None，則貼到目前選中的節點或專案根節點。
-        try:
-            try:
-                ttype = (
-                    self._safe_data(target_item, 0, None)
-                    if target_item is not None
-                    else None
-                )
-                ttext = target_item.text(0) if target_item is not None else None
-                # debug log removed
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        parent = self.clipboard_manager.paste(target_item)
-        if parent:
-            try:
+        if self.clipboard_manager:
+            parent = self.clipboard_manager.paste(target_item)
+            if parent:
                 self.update_right_table(parent, 0)
-            except Exception:
-                pass
-        # 確保貼上操作後樹狀隱藏 Tag 節點
-        try:
-            if getattr(self, "tree", None) and hasattr(self.tree, "hide_all_tags"):
-                try:
-                    self.tree.hide_all_tags()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        if hasattr(self.tree, "hide_all_tags"):
+            self.tree.hide_all_tags()
 
     def on_import_device_csv(self, device_item):
         # 觸發 Device CSV 匯入流程的 UI 端 handler。

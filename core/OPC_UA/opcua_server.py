@@ -35,6 +35,56 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def get_variant_type(data_type_str: str) -> ua.VariantType:
+    """Map Modbus/UI data type to OPC UA VariantType.
+
+    Args:
+        data_type_str: Data type string (e.g., "Float", "Boolean", "Int32")
+
+    Returns:
+        OPC UA VariantType for the data type
+    """
+    if not data_type_str:
+        return ua.VariantType.Double
+
+    s = data_type_str.lower()
+
+    # Boolean types
+    if "boolean" in s or "bool" in s:
+        return ua.VariantType.Boolean
+
+    # Integer types (8-bit)
+    if "byte" in s or "uint8" in s or "char" in s:
+        return ua.VariantType.Byte
+
+    # Integer types (16-bit)
+    if "short" in s or "int16" in s:
+        return ua.VariantType.Int16
+    if "word" in s or "uint16" in s or "int" in s:
+        return ua.VariantType.UInt16
+
+    # Integer types (32-bit)
+    if "long" in s or "int32" in s or "dword" in s or "uint32" in s:
+        return ua.VariantType.Int32
+
+    # Integer types (64-bit)
+    if "llong" in s or "int64" in s or "qword" in s or "uint64" in s:
+        return ua.VariantType.Int64
+
+    # Float types
+    if "float" in s or "real" in s:
+        return ua.VariantType.Float
+    if "double" in s:
+        return ua.VariantType.Double
+
+    # String type
+    if "string" in s:
+        return ua.VariantType.String
+
+    # Default to Double
+    return ua.VariantType.Double
+
+
 def get_opcua_datatype(data_type_str: str) -> ua.NodeId:
     """Map Modbus/UI data type to OPC UA DataType NodeId.
 
@@ -134,25 +184,54 @@ def get_access_level(access_str: str) -> int:
         return result
 
 
-def get_default_value(data_type_str: str) -> Any:
+def get_default_value(
+    data_type_str: str, is_array: bool = False, array_length: int = 0
+) -> Any:
     """Get default value for a data type.
 
     Args:
         data_type_str: Data type string
+        is_array: Whether this is an array type
+        array_length: Length of the array (if is_array=True)
 
     Returns:
         Default value for the type
     """
     s = data_type_str.lower() if data_type_str else ""
 
-    if "boolean" in s or "bool" in s:
-        return False
-    elif "float" in s or "real" in s or "double" in s:
-        return 0.0
-    elif "string" in s:
-        return ""
+    if is_array:
+        if array_length <= 0:
+            array_length = 1
+
+        if "boolean" in s or "bool" in s:
+            return [False] * array_length
+        elif "float" in s or "real" in s:
+            return [0.0] * array_length
+        elif "double" in s:
+            return [0.0] * array_length
+        elif "byte" in s or "uint8" in s:
+            return [0] * array_length
+        elif "short" in s or "int16" in s:
+            return [0] * array_length
+        elif "word" in s or "uint16" in s:
+            return [0] * array_length
+        elif "long" in s or "int32" in s or "dword" in s or "uint32" in s:
+            return [0] * array_length
+        elif "llong" in s or "int64" in s or "qword" in s or "uint64" in s:
+            return [0] * array_length
+        elif "string" in s:
+            return [""] * array_length
+        else:
+            return [0.0] * array_length
     else:
-        return 0
+        if "boolean" in s or "bool" in s:
+            return False
+        elif "float" in s or "real" in s or "double" in s:
+            return 0.0
+        elif "string" in s:
+            return ""
+        else:
+            return 0
 
 
 def is_array_type(
@@ -459,40 +538,6 @@ class OPCUAServer:
             logger.error(f"Failed to start OPC UA server thread: {e}")
             return False
 
-        try:
-            # Get config
-            config = self._get_server_config()
-            host = host or config["host"]
-            port = port or config["port"]
-
-            # Stop existing server and wait for it to fully stop
-            if self.is_running or self.server is not None:
-                logger.info("Stopping existing OPC UA server...")
-                self.stop_server()
-                # Wait a bit for cleanup
-                import time
-
-                time.sleep(2)  # Increased wait time to ensure full cleanup
-
-            # Clear any existing tags/nodes ONLY if server was running before
-            # For fresh start, don't clear (server will be empty anyway)
-            if self.is_running or self.server is not None:
-                self._tag_nodes.clear()
-                self._tag_info.clear()
-
-            # Start in background thread
-            self.server_thread = threading.Thread(
-                target=self._run_server_in_thread, args=(host, port), daemon=True
-            )
-            self.server_thread.start()
-
-            logger.info(f"OPC UA server starting on {host}:{port}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to start OPC UA server thread: {e}")
-            return False
-
     def reload_tags(self) -> bool:
         """Reload all tags - clears old nodes and creates new ones.
 
@@ -523,60 +568,6 @@ class OPCUAServer:
 
         except Exception as e:
             logger.error(f"Error reloading tags: {e}", exc_info=True)
-            return False
-
-        try:
-            # Get config
-            config = self._get_server_config()
-            host = host or config["host"]
-            port = port or config["port"]
-
-            # Stop existing server and wait for it to fully stop
-            if self.is_running or self.server is not None:
-                logger.info("Stopping existing OPC UA server...")
-                self.stop_server()
-                # Wait a bit for cleanup
-                import time
-
-                time.sleep(1)
-
-            # Clear any existing tags/nodes
-            self._tag_nodes.clear()
-            self._tag_info.clear()
-
-            # Start in background thread
-            self.server_thread = threading.Thread(
-                target=self._run_server_in_thread, args=(host, port), daemon=True
-            )
-            self.server_thread.start()
-
-            logger.info(f"OPC UA server starting on {host}:{port}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to start OPC UA server thread: {e}")
-            return False
-
-        try:
-            # Get config
-            config = self._get_server_config()
-            host = host or config["host"]
-            port = port or config["port"]
-
-            # Stop existing server
-            self.stop_server()
-
-            # Start in background thread
-            self.server_thread = threading.Thread(
-                target=self._run_server_in_thread, args=(host, port), daemon=True
-            )
-            self.server_thread.start()
-
-            logger.info(f"OPC UA server starting on {host}:{port}")
-            return True
-
-        except Exception as e:
-            logger.error(f"Failed to start OPC UA server thread: {e}")
             return False
 
     def stop_server(self):
@@ -671,66 +662,6 @@ class OPCUAServer:
             logger.error(f"Error loading tags to OPC UA: {e}", exc_info=True)
             return False
 
-        if not self.tree_widget:
-            logger.warning("Tree widget not set")
-            return False
-
-        try:
-            # Clear old nodes first
-            self._clear_all_nodes()
-
-            # Use tree_root like monitor does - this walks ALL items including hidden tags
-            tree_root = getattr(self.tree_widget, "root_node", None)
-            if not tree_root:
-                logger.warning("No root node in tree")
-                return False
-
-            tag_count = [0]  # Use list for mutable reference
-
-            # Walk tree: Project -> Connectivity -> Channel -> Device -> [Group] -> Tag
-            # Similar to monitor's _extract_all_tags method
-            def walk_tree(item, parent_channel=None, parent_device=None):
-                """Recursively walk tree collecting tags."""
-                if not item:
-                    return
-
-                try:
-                    item_type = item.data(0, Qt.ItemDataRole.UserRole)
-                except Exception as e:
-                    logger.debug(f"Could not get item type: {e}")
-                    item_type = None
-
-                # Update parent context
-                if item_type == "Channel":
-                    parent_channel = item
-                elif item_type == "Device":
-                    parent_device = item
-                elif item_type == "Tag":
-                    # Add tag to OPC UA
-                    try:
-                        if self._add_tag_to_opcua(item):
-                            tag_count[0] += 1
-                    except Exception as e:
-                        logger.error(
-                            f"Error adding tag '{item.text(0)}' to OPC UA: {e}"
-                        )
-                    # Don't recurse further for tags
-                    return
-
-                # Recurse to children (including Group children)
-                for i in range(item.childCount()):
-                    walk_tree(item.child(i), parent_channel, parent_device)
-
-            # Start from root node (like monitor)
-            walk_tree(tree_root)
-
-            logger.info(f"Loaded {tag_count[0]} tags to OPC UA server")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error loading tags to OPC UA: {e}", exc_info=True)
-            return False
-
     def _add_tag_to_opcua(self, tag_item) -> bool:
         """Add a single tag from tree item to OPC UA server.
 
@@ -762,6 +693,19 @@ class OPCUAServer:
                 f"Tag '{tag_name}' access from tree: '{access}' (type: {type(access)})"
             )
 
+            # Extract array element count from address if present (e.g., "428672 [58]")
+            array_element_count = None
+            is_array = is_array_type(data_type, address, metadata)
+            if is_array and address:
+                import re
+
+                match = re.search(r"\[(\d+)\]", str(address))
+                if match:
+                    array_element_count = int(match.group(1))
+                    logger.debug(
+                        f"Array tag '{tag_name}': element_count={array_element_count}"
+                    )
+
             # Build tag info dict
             tag_info = {
                 "path": tag_path,
@@ -773,7 +717,8 @@ class OPCUAServer:
                 "scan_rate": scan_rate,
                 "scaling": scaling,
                 "metadata": metadata,
-                "is_array": is_array_type(data_type, address, metadata),
+                "is_array": is_array,
+                "array_element_count": array_element_count,
             }
 
             # Get scaled data type if scaling is enabled
@@ -811,14 +756,6 @@ class OPCUAServer:
             logger.error(f"Error adding tag '{tag_item.text(0)}' to OPC UA: {e}")
             return False
 
-        except Exception as e:
-            logger.error(f"Error adding tag '{tag_item.text(0)}' to OPC UA: {e}")
-            return False
-
-        except Exception as e:
-            logger.error(f"Error adding tag '{tag_item.text(0)}' to OPC UA: {e}")
-            return False
-
     async def _add_opcua_node_async(self, tag_info: dict):
         """Async method to add OPC UA variable node.
 
@@ -838,7 +775,11 @@ class OPCUAServer:
             opcua_datatype = get_opcua_datatype(tag_info["opcua_datatype"])
 
             # Get default value
-            default_value = get_default_value(tag_info["opcua_datatype"])
+            is_array = tag_info.get("is_array", False)
+            array_length = tag_info.get("array_element_count", 0)
+            default_value = get_default_value(
+                tag_info["opcua_datatype"], is_array, array_length
+            )
 
             # Get access level first
             access_level = get_access_level(tag_info["access"])
@@ -857,12 +798,23 @@ class OPCUAServer:
                 pass
 
             # Create variable node
-            var_node = await objects.add_variable(
-                ua.NodeId.from_string(node_id),
-                tag_info["name"],
-                default_value,
-                datatype=opcua_datatype,
-            )
+            if is_array:
+                # For array types, wrap the value in a Variant
+                variant_type = get_variant_type(tag_info["opcua_datatype"])
+                variant = ua.Variant(default_value, variant_type)
+                var_node = await objects.add_variable(
+                    ua.NodeId.from_string(node_id),
+                    tag_info["name"],
+                    variant,
+                    datatype=opcua_datatype,
+                )
+            else:
+                var_node = await objects.add_variable(
+                    ua.NodeId.from_string(node_id),
+                    tag_info["name"],
+                    default_value,
+                    datatype=opcua_datatype,
+                )
 
             # Set node properties
             if tag_info.get("description"):
@@ -894,60 +846,6 @@ class OPCUAServer:
                         logger.debug(f"set_attribute(AccessLevel) failed: {e2}")
             # For read-only nodes (0x01), no action needed - nodes are read-only by default
 
-            # Verify the access level was set
-            try:
-                current_level = await var_node.read_attribute(
-                    ua.AttributeIds.AccessLevel
-                )
-                logger.debug(
-                    f"Verified AccessLevel for '{tag_info['path']}': 0x{current_level.Value.Value:02x}"
-                )
-            except Exception as e:
-                logger.debug(f"Failed to verify AccessLevel: {e}")
-
-            # Set access level
-            access_level = get_access_level(tag_info["access"])
-            logger.debug(
-                f"Setting AccessLevel for '{tag_info['path']}': access_str='{tag_info['access']}' -> level=0x{access_level:02x}"
-            )
-
-            # Try multiple ways to set access level (asyncua compatibility)
-            try:
-                # Method 1: set_attribute with variant
-                from asyncua.ua.uatypes import Variant
-
-                await var_node.set_attribute(
-                    ua.AttributeIds.AccessLevel,
-                    Variant(access_level, ua.VariantType.Byte),
-                )
-                logger.debug(f"AccessLevel set using set_attribute with Variant")
-            except Exception as e1:
-                logger.debug(f"Method 1 failed: {e1}")
-                try:
-                    # Method 2: direct set_writable/readable
-                    if access_level == 0x03:  # Read/Write
-                        var_node.set_writable()
-                        logger.debug(f"AccessLevel set using set_writable()")
-                    elif access_level == 0x02:  # Write only
-                        var_node.set_writable()
-                        # Note: No set_readable() exists, so read-only is the default
-                except Exception as e2:
-                    logger.debug(f"Method 2 failed: {e2}")
-                    try:
-                        # Method 3: traditional set_attribute without Variant
-                        await var_node.set_attribute(
-                            ua.AttributeIds.AccessLevel, access_level
-                        )
-                        logger.debug(
-                            f"AccessLevel set using set_attribute without Variant"
-                        )
-                    except Exception as e3:
-                        logger.debug(f"Method 3 failed: {e3}")
-                        logger.warning(
-                            f"Failed to set AccessLevel for '{tag_info['path']} after all attempts"
-                        )
-                        pass
-
             # Set access level
             access_level = get_access_level(tag_info["access"])
             logger.debug(
@@ -973,10 +871,22 @@ class OPCUAServer:
             # Set array type if needed
             if tag_info.get("is_array"):
                 try:
-                    from opcua import ua as ua_module
-
-                    await var_node.set_attribute(ua_module.AttributeIds.ValueRank, 1)
-                except Exception:
+                    await var_node.set_attribute(ua.AttributeIds.ValueRank, 1)
+                    # Set ArrayDimensions attribute (required for arrays in OPC UA)
+                    array_length = tag_info.get("array_element_count", 0)
+                    if array_length > 0:
+                        await var_node.set_attribute(
+                            ua.AttributeIds.ArrayDimensions, [array_length]
+                        )
+                        logger.debug(
+                            f"Array tag '{tag_info['path']}': ArrayDimensions=[{array_length}], ValueRank=1"
+                        )
+                    else:
+                        logger.debug(
+                            f"Array tag '{tag_info['path']}': ValueRank=1 (unknown length)"
+                        )
+                except Exception as e:
+                    logger.debug(f"Error setting array attributes: {e}")
                     pass
 
             return var_node
@@ -1019,9 +929,8 @@ class OPCUAServer:
                     ):
                         try:
                             node_class = await child.read_node_class()
-                            from opcua import ua as ua_module
 
-                            if node_class == ua_module.NodeClass.Variable:
+                            if node_class == ua.NodeClass.Variable:
                                 await objects.delete(child)
                                 deleted += 1
                         except Exception:
@@ -1085,17 +994,30 @@ class OPCUAServer:
                         # Update OPC UA node value
                         if self.loop and not self.loop.is_closed():
                             asyncio.run_coroutine_threadsafe(
-                                self._update_node_value_async(node, value), self.loop
+                                self._update_node_value_async(node, value, tag_info),
+                                self.loop,
                             )
                 except Exception as e:
                     logger.debug(f"Error syncing tag '{tag_path}': {e}")
         except Exception as e:
             logger.error(f"Error in sync_values: {e}")
 
-    async def _update_node_value_async(self, node, value):
-        """Async method to update node value."""
+    async def _update_node_value_async(self, node, value, tag_info):
+        """Async method to update node value.
+
+        Args:
+            node: OPC UA variable node
+            value: Value to write
+            tag_info: Tag information dict
+        """
         try:
-            await node.write_value(value)
+            is_array = tag_info.get("is_array", False)
+            if is_array:
+                variant_type = get_variant_type(tag_info["opcua_datatype"])
+                variant = ua.Variant(value, variant_type)
+                await node.write_value(variant)
+            else:
+                await node.write_value(value)
         except Exception as e:
             logger.debug(f"Error writing value to node: {e}")
 

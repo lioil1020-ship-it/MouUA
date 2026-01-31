@@ -16,8 +16,8 @@ from PyQt6.QtCore import Qt
 
 from core.config import GROUP_SEPARATOR
 from .validators import (
-    to_numeric_flag, 
-    normalize_dict_flags, 
+    to_numeric_flag,
+    normalize_dict_flags,
     is_tcp_like_driver,
 )
 from .config_builder import (
@@ -30,7 +30,7 @@ from .serializers import export_tags_to_csv
 
 class AppController:
     """Main application controller for configuration management.
-    
+
     Manages the application's tree structure and provides methods for:
     - Normalizing channel, device, and tag configurations
     - Importing/exporting project structures
@@ -39,7 +39,7 @@ class AppController:
 
     def __init__(self, app=None):
         """Initialize controller with optional app reference.
-        
+
         Args:
             app: The main application instance (optional)
         """
@@ -47,14 +47,14 @@ class AppController:
 
     def normalize_channel(self, data: Dict[str, Any], item=None) -> Dict[str, Any]:
         """Normalize channel configuration data.
-        
+
         Ensures communication params use canonical keys (network_adapter/network_adapter_ip)
         for TCP-like drivers.
-        
+
         Args:
             data: Channel configuration dict
             item: Optional QTreeWidgetItem to inspect existing driver info
-            
+
         Returns:
             Normalized copy of channel data
         """
@@ -62,298 +62,259 @@ class AppController:
             nd = deepcopy(data) if data else {}
         except Exception:
             nd = dict(data or {})
-        
+
         try:
-            params = nd.get('params') if isinstance(nd.get('params'), dict) else None
+            params = nd.get("params") if isinstance(nd.get("params"), dict) else None
             if params is None:
-                params = nd.get('communication') if isinstance(nd.get('communication'), dict) else None
+                params = (
+                    nd.get("communication")
+                    if isinstance(nd.get("communication"), dict)
+                    else None
+                )
             if params is None:
                 params = {}
-            
+
             # Detect driver type from data or existing item
-            driver_type = nd.get('driver')
+            driver_type = nd.get("driver")
             if item is not None:
                 try:
                     old_drv = item.data(2, Qt.ItemDataRole.UserRole)
-                    if driver_type is None or driver_type == '':
+                    if driver_type is None or driver_type == "":
                         driver_type = old_drv
                 except Exception:
                     pass
-            
+
             # Extract driver type string
             if isinstance(driver_type, dict):
-                driver_type = driver_type.get('type')
-            
+                driver_type = driver_type.get("type")
+
             # Normalize params for TCP-like drivers
             params = normalize_communication_params(params, driver_type)
-            nd['params'] = params
-            nd['communication'] = params
-            
+            nd["params"] = params
+            nd["communication"] = params
+
         except Exception:
             pass
-        
+
         return nd
 
     def save_channel(self, item, data: Dict[str, Any]):
-        """Save channel configuration to tree item.
-        
-        Stores normalized channel data in appropriate QTreeWidgetItem roles.
-        
-        Args:
-            item: QTreeWidgetItem to save into
-            data: Channel configuration dict
-        """
+        import logging
+
+        logger = logging.getLogger(__name__)
+
         try:
             data = self.normalize_channel(data, item)
-        except Exception:
-            pass
-        
-        # Extract general info
-        general = data.get('general', {}) if isinstance(data.get('general'), dict) else {}
-        name = general.get('channel_name') or general.get('name') or data.get('name') or 'Channel'
-        desc = general.get('description') or data.get('description')
-        
-        try:
-            item.setText(0, name)
-        except Exception:
-            pass
-        
-        # Role 1: description
-        try:
-            if desc is not None:
-                item.setData(1, Qt.ItemDataRole.UserRole, desc)
-        except Exception:
-            pass
-        
-        # Role 2: driver
-        try:
-            driver = data.get('driver')
-            item.setData(2, Qt.ItemDataRole.UserRole, driver)
-            if isinstance(driver, dict):
-                item.setData(9, Qt.ItemDataRole.UserRole, 
-                           OrderedDict([('type', driver.get('type')), ('params', driver.get('params', {}))]))
-        except Exception:
-            pass
-        
-        # Role 3: communication params
-        try:
-            params = data.get('params') or data.get('communication')
-            if params:
-                item.setData(3, Qt.ItemDataRole.UserRole, params)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Channel normalization failed: {e}")
+            return
+
+        from core.utils import (
+            safe_dict_get,
+            update_tree_item_text,
+            update_tree_item_data,
+        )
+
+        general = safe_dict_get(data, "general") or {}
+        name = (
+            general.get("channel_name")
+            or general.get("name")
+            or data.get("name")
+            or "Channel"
+        )
+        desc = general.get("description") or data.get("description")
+
+        update_tree_item_text(item, 0, name)
+
+        if desc is not None:
+            update_tree_item_data(item, 1, Qt.ItemDataRole.UserRole, desc)
+
+        driver = data.get("driver")
+        update_tree_item_data(item, 2, Qt.ItemDataRole.UserRole, driver)
+        if isinstance(driver, dict):
+            update_tree_item_data(
+                item,
+                9,
+                Qt.ItemDataRole.UserRole,
+                OrderedDict(
+                    [("type", driver.get("type")), ("params", driver.get("params", {}))]
+                ),
+            )
+
+        params = data.get("params") or data.get("communication")
+        if params:
+            update_tree_item_data(item, 3, Qt.ItemDataRole.UserRole, params)
 
     def save_device(self, item, data: Dict[str, Any]):
-        """Save device configuration to tree item.
-        
-        Stores normalized device data including timing, encoding, and block sizes.
-        
-        Args:
-            item: QTreeWidgetItem to save into
-            data: Device configuration dict
-        """
         import logging
-        logger = logging.getLogger(__name__)
-        
-        try:
-            general = data.get('general', {}) if isinstance(data.get('general'), dict) else {}
-        except Exception:
-            general = {}
-        
-        # Name
-        name = general.get('name') or data.get('name')
-        if name:
-            try:
-                item.setText(0, name)
-            except Exception as e:
-                logger.error(f"Error setting device name: {e}")
-        
-        # Device ID (role 2)
-        device_id = general.get('device_id') or data.get('device_id')
-        try:
-            if device_id is not None:
-                item.setData(2, Qt.ItemDataRole.UserRole, device_id)
-        except Exception as e:
-            logger.error(f"Error setting device_id: {e}")
-        
-        # Description (role 1)
-        desc = general.get('description') or data.get('description')
-        try:
-            if desc is not None:
-                item.setData(1, Qt.ItemDataRole.UserRole, desc)
-        except Exception as e:
-            logger.error(f"Error setting description: {e}")
-        
-        # Timing (role 3) - normalize keys
-        timing = general.get('timing') or data.get('timing')
-        if timing and isinstance(timing, dict):
-            try:
-                # Normalize timing keys to canonical names but preserve any
-                # additional timing fields (e.g. 'attempts', 'inter_req_delay').
-                nt = dict(timing)  # start with a shallow copy to preserve extras
-                # mapping of known legacy keys -> canonical keys
-                mapping = {
-                    'connect_timeout': 'connect_timeout',
-                    'connect_timeout_ms': 'connect_timeout',
-                    'conn_timeout': 'connect_timeout',
-                    'request_timeout': 'request_timeout',
-                    'req_timeout': 'request_timeout',
-                    'request_timeout_ms': 'request_timeout',
-                }
-                # Additional mappings for runtime names expected by ModbusMonitor
-                extra_map = {
-                    'attempts': 'attempts_before_timeout',
-                    'attempts_before_timeout': 'attempts_before_timeout',
-                    'inter_req_delay': 'inter_request_delay',
-                    'inter_request_delay': 'inter_request_delay',
-                }
-                # Apply mapping: copy value to canonical name, remove legacy key when renamed
-                for old_key, new_key in mapping.items():
-                    if old_key in timing:
-                        nt[new_key] = timing[old_key]
-                        # keep the original key as well so UI form fields
-                        # that expect legacy keys (e.g. 'req_timeout') can still
-                        # load values via FormBuilder.set_values().
-                for old_key, new_key in extra_map.items():
-                    if old_key in timing:
-                        nt[new_key] = timing[old_key]
 
-                item.setData(3, Qt.ItemDataRole.UserRole, nt)
-            except Exception as e:
-                logger.error(f"Error setting timing: {e}")
-        
-        # Data access (role 4)
-        access = general.get('data_access') or data.get('data_access')
-        try:
-            if access:
-                logger.debug(f"Saving data_access: {access}")
-                item.setData(4, Qt.ItemDataRole.UserRole, normalize_dict_flags(access))
-            else:
-                logger.debug("No data_access provided")
-        except Exception as e:
-            logger.error(f"Error setting data_access: {e}")
-        
-        # Encoding (role 5)
-        encoding = general.get('encoding') or data.get('encoding')
-        try:
-            if encoding:
-                logger.debug(f"Saving encoding raw: {encoding}")
-                normalized = normalize_dict_flags(encoding)
-                logger.debug(f"Saving encoding normalized: {normalized}")
-                item.setData(5, Qt.ItemDataRole.UserRole, normalized)
-            else:
-                logger.debug(f"No encoding provided. general.encoding={general.get('encoding')}, data.encoding={data.get('encoding')}")
-        except Exception as e:
-            logger.error(f"Error setting encoding: {e}", exc_info=True)
-        
-        # Block sizes (role 6)
-        blocks = general.get('block_sizes') or data.get('block_sizes')
-        try:
-            if blocks:
-                item.setData(6, Qt.ItemDataRole.UserRole, blocks)
-        except Exception as e:
-            logger.error(f"Error setting block_sizes: {e}")
+        logger = logging.getLogger(__name__)
+
+        from core.utils import (
+            safe_dict_get,
+            update_tree_item_text,
+            update_tree_item_data,
+        )
+
+        general = safe_dict_get(data, "general") or {}
+
+        name = general.get("name") or data.get("name")
+        if name:
+            update_tree_item_text(item, 0, name)
+
+        device_id = general.get("device_id") or data.get("device_id")
+        if device_id is not None:
+            if not update_tree_item_data(item, 2, Qt.ItemDataRole.UserRole, device_id):
+                logger.error(f"Error setting device_id: {device_id}")
+
+        desc = general.get("description") or data.get("description")
+        if desc is not None:
+            if not update_tree_item_data(item, 1, Qt.ItemDataRole.UserRole, desc):
+                logger.error(f"Error setting description: {desc}")
+
+        timing = general.get("timing") or data.get("timing")
+        if timing and isinstance(timing, dict):
+            normalized_timing = self._normalize_timing(timing)
+            if not update_tree_item_data(
+                item, 3, Qt.ItemDataRole.UserRole, normalized_timing
+            ):
+                logger.error(f"Error setting timing: {timing}")
+
+        access = general.get("data_access") or data.get("data_access")
+        if access:
+            if not update_tree_item_data(
+                item, 4, Qt.ItemDataRole.UserRole, normalize_dict_flags(access)
+            ):
+                logger.error(f"Error setting data_access: {access}")
+
+        encoding = general.get("encoding") or data.get("encoding")
+        if encoding:
+            normalized = normalize_dict_flags(encoding)
+            if not update_tree_item_data(item, 5, Qt.ItemDataRole.UserRole, normalized):
+                logger.error(f"Error setting encoding: {encoding}")
+
+        blocks = general.get("block_sizes") or data.get("block_sizes")
+        if blocks:
+            if not update_tree_item_data(item, 6, Qt.ItemDataRole.UserRole, blocks):
+                logger.error(f"Error setting block_sizes: {blocks}")
+
+    def _normalize_timing(self, timing: dict) -> dict:
+        result = dict(timing)
+        mapping = {
+            "connect_timeout": "connect_timeout",
+            "connect_timeout_ms": "connect_timeout",
+            "conn_timeout": "connect_timeout",
+            "request_timeout": "request_timeout",
+            "req_timeout": "request_timeout",
+            "request_timeout_ms": "request_timeout",
+        }
+        for old_key, new_key in mapping.items():
+            if old_key in timing:
+                result[new_key] = timing[old_key]
+
+        extra_map = {
+            "attempts": "attempts_before_timeout",
+            "attempts_before_timeout": "attempts_before_timeout",
+            "inter_req_delay": "inter_request_delay",
+            "inter_request_delay": "inter_request_delay",
+        }
+        for old_key, new_key in extra_map.items():
+            if old_key in timing:
+                result[new_key] = timing[old_key]
+
+        return result
 
     def save_tag(self, item, data: Dict[str, Any]):
-        """Save tag configuration to tree item.
-        
-        Stores tag properties in appropriate roles: name, description, data type, 
-        address, scan rate, and scaling info.
-        
-        Args:
-            item: QTreeWidgetItem to save into
-            data: Tag configuration dict
-        """
-        try:
-            general = data.get('general', {})
-            if not isinstance(general, dict):
-                general = data
-            
-            name = general.get('name') or data.get('name') or 'Tag'
-            item.setText(0, name)
-            
-            # Role 1: description
-            item.setData(1, Qt.ItemDataRole.UserRole, general.get('description'))
-            
-            # Role 2: data type
-            item.setData(2, Qt.ItemDataRole.UserRole, general.get('data_type'))
-            
-            # Role 3: access
-            access = general.get('access') or data.get('access')
-            if access:
-                item.setData(3, Qt.ItemDataRole.UserRole, access)
-            
-            # Role 4: address
-            addr = general.get('address') or data.get('address')
-            if addr:
-                # Store address as-is; it should already be formatted correctly
-                # from calculate_next_address (e.g., "400000", "000000", etc.)
-                item.setData(4, Qt.ItemDataRole.UserRole, str(addr).strip())
-            
-            # Role 5: scan rate
-            scan = general.get('scan_rate') or data.get('scan_rate')
-            if scan:
-                item.setData(5, Qt.ItemDataRole.UserRole, scan)
-            
-            # Role 6: scaling
-            scaling = data.get('scaling')
-            if isinstance(scaling, dict):
-                item.setData(6, Qt.ItemDataRole.UserRole, scaling)
-            
-            # Role 7: metadata (addrnum, is_array, array_size)
-            try:
-                import re
-                addr_val = item.data(4, Qt.ItemDataRole.UserRole)
-                dt_val = item.data(2, Qt.ItemDataRole.UserRole)
-                nm = item.text(0) or ''
-                
-                addrnum = None
-                if addr_val:
-                    m = re.search(r'(\d+)', str(addr_val))
-                    if m:
-                        addrnum = int(m.group(1))
-                
-                is_array = False
-                array_size = 1  # 預設佔用 1 個地址
-                if isinstance(dt_val, str) and 'array' in dt_val.lower():
-                    is_array = True
-                elif isinstance(addr_val, str) and re.search(r'\[\d+\]', addr_val):
-                    is_array = True
-                elif 'array' in nm.lower():
-                    is_array = True
-                
-                # 如果是 Array 型別，提取陣列大小
-                if is_array and isinstance(addr_val, str):
-                    match = re.search(r'\[(\d+)\]', str(addr_val))
-                    if match:
-                        array_size = int(match.group(1))
-                
-                item.setData(7, Qt.ItemDataRole.UserRole, {'addrnum': addrnum, 'is_array': is_array, 'array_size': array_size})
-            except Exception:
-                pass
-        except Exception:
-            pass
+        from core.utils import (
+            safe_dict_get,
+            update_tree_item_text,
+            update_tree_item_data,
+            safe_item_text,
+        )
+
+        general = safe_dict_get(data, "general") or {}
+        if not isinstance(general, dict):
+            general = data
+
+        name = general.get("name") or data.get("name") or "Tag"
+        update_tree_item_text(item, 0, name)
+
+        desc = general.get("description")
+        if desc is not None:
+            update_tree_item_data(item, 1, Qt.ItemDataRole.UserRole, desc)
+
+        dtype = general.get("data_type")
+        if dtype is not None:
+            update_tree_item_data(item, 2, Qt.ItemDataRole.UserRole, dtype)
+
+        access = general.get("access") or data.get("access")
+        if access:
+            update_tree_item_data(item, 3, Qt.ItemDataRole.UserRole, access)
+
+        addr = general.get("address") or data.get("address")
+        if addr:
+            update_tree_item_data(item, 4, Qt.ItemDataRole.UserRole, str(addr).strip())
+
+        scan = general.get("scan_rate") or data.get("scan_rate")
+        if scan:
+            update_tree_item_data(item, 5, Qt.ItemDataRole.UserRole, scan)
+
+        scaling = data.get("scaling")
+        if isinstance(scaling, dict):
+            update_tree_item_data(item, 6, Qt.ItemDataRole.UserRole, scaling)
+
+        self._update_tag_metadata(item)
+
+    def _update_tag_metadata(self, item):
+        import re
+
+        addr_val = item.data(4, Qt.ItemDataRole.UserRole)
+        dt_val = item.data(2, Qt.ItemDataRole.UserRole)
+        nm = item.text(0) or ""
+
+        addrnum = None
+        if addr_val:
+            match = re.search(r"(\d+)", str(addr_val))
+            if match:
+                addrnum = int(match.group(1))
+
+        is_array = False
+        if isinstance(dt_val, str) and "array" in dt_val.lower():
+            is_array = True
+        elif isinstance(addr_val, str) and re.search(r"\[\d+\]", addr_val):
+            is_array = True
+        elif "array" in nm.lower():
+            is_array = True
+
+        array_size = 1
+        if is_array and isinstance(addr_val, str):
+            match = re.search(r"\[(\d+)\]", str(addr_val))
+            if match:
+                array_size = int(match.group(1))
+
+        metadata = {"addrnum": addrnum, "is_array": is_array, "array_size": array_size}
+        item.setData(7, Qt.ItemDataRole.UserRole, metadata)
 
     def normalize_all_channels(self) -> int:
         """Re-normalize all channels in the current tree.
-        
+
         Walks the tree and applies normalization to every channel,
         updating stored role data to use canonical communication parameter keys.
-        
+
         Returns:
             Number of channels processed
         """
         if not self.app:
             return 0
-        
-        tree = getattr(self.app, 'tree', None)
+
+        tree = getattr(self.app, "tree", None)
         if not tree:
             return 0
-        
-        conn = getattr(tree, 'conn_node', None)
+
+        conn = getattr(tree, "conn_node", None)
         if not conn:
             return 0
-        
+
         count = 0
         for i in range(conn.childCount()):
             try:
@@ -363,50 +324,50 @@ class AppController:
                 try:
                     name = ch.text(0)
                     desc = ch.data(1, Qt.ItemDataRole.UserRole)
-                    data['general'] = {'channel_name': name, 'description': desc}
+                    data["general"] = {"channel_name": name, "description": desc}
                 except Exception:
                     pass
-                
+
                 try:
                     drv = ch.data(2, Qt.ItemDataRole.UserRole)
-                    data['driver'] = drv
+                    data["driver"] = drv
                 except Exception:
                     pass
-                
+
                 try:
                     comm = ch.data(3, Qt.ItemDataRole.UserRole)
                     if isinstance(comm, dict):
-                        data['communication'] = dict(comm)
+                        data["communication"] = dict(comm)
                 except Exception:
                     pass
-                
+
                 self.save_channel(ch, data)
                 count += 1
             except Exception:
                 continue
-        
+
         # Also normalize OPC UA settings if present
         try:
-            opc = getattr(self.app, 'opcua_settings', None)
+            opc = getattr(self.app, "opcua_settings", None)
             if isinstance(opc, dict):
                 opc = normalize_opcua_network_adapter(opc)
                 self.app.opcua_settings = opc
-                if hasattr(self.app, 'apply_opcua_settings'):
+                if hasattr(self.app, "apply_opcua_settings"):
                     try:
                         self.app.apply_opcua_settings(opc)
                     except Exception:
                         pass
         except Exception:
             pass
-        
+
         return count
 
     def normalize_opcua_settings(self, opc: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize OPC UA settings for network adapter configuration.
-        
+
         Args:
             opc: OPC UA settings dict
-            
+
         Returns:
             Normalized OPC UA settings
         """
@@ -414,7 +375,7 @@ class AppController:
 
     def export_device_to_csv(self, device_item, filepath: str) -> None:
         """Export tags from device to CSV file.
-        
+
         Args:
             device_item: QTreeWidgetItem for the device
             filepath: Path where CSV will be written
@@ -423,29 +384,29 @@ class AppController:
 
     def import_device_from_csv(self, device_item, filepath: str) -> None:
         """Import tags from CSV file into device.
-        
+
         Args:
             device_item: QTreeWidgetItem for the device
             filepath: Path to CSV file to import
         """
         import csv
         from PyQt6.QtWidgets import QTreeWidgetItem
-        
+
         if not filepath or not os.path.exists(filepath):
             return
-        
+
         try:
-            with open(filepath, 'r', encoding='utf-8-sig') as f:
+            with open(filepath, "r", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
                 if reader.fieldnames is None:
                     return
-                
+
                 for row in reader:
                     # Skip empty rows
-                    full_tag_name = row.get('Tag Name', '').strip()
+                    full_tag_name = row.get("Tag Name", "").strip()
                     if not full_tag_name:
                         continue
-                    
+
                     # Parse tag name: if it contains GROUP_SEPARATOR, split into group path and tag name
                     # e.g., "Set.WIRE" -> groups=["Set"], tag_name="WIRE"
                     # e.g., "Set.Group2.WIRE" -> groups=["Set", "Group2"], tag_name="WIRE"
@@ -456,7 +417,7 @@ class AppController:
                     else:
                         groups = []
                         tag_name = full_tag_name
-                    
+
                     # Navigate/create group structure
                     current_parent = device_item
                     for group_name in groups:
@@ -464,32 +425,36 @@ class AppController:
                         group_item = None
                         for i in range(current_parent.childCount()):
                             child = current_parent.child(i)
-                            if (child.text(0) == group_name and 
-                                child.data(0, Qt.ItemDataRole.UserRole) == 'Group'):
+                            if (
+                                child.text(0) == group_name
+                                and child.data(0, Qt.ItemDataRole.UserRole) == "Group"
+                            ):
                                 group_item = child
                                 break
-                        
+
                         # Create group if not found
                         if group_item is None:
                             group_item = QTreeWidgetItem(current_parent)
                             group_item.setText(0, group_name)
-                            group_item.setData(0, Qt.ItemDataRole.UserRole, 'Group')
-                            group_item.setData(1, Qt.ItemDataRole.UserRole, '')  # description
-                        
+                            group_item.setData(0, Qt.ItemDataRole.UserRole, "Group")
+                            group_item.setData(
+                                1, Qt.ItemDataRole.UserRole, ""
+                            )  # description
+
                         current_parent = group_item
-                    
+
                     # Get tag data from CSV
-                    address = row.get('Address', '').strip()
-                    data_type = row.get('Data Type', '').strip()
-                    access = row.get('Client Access', 'R/W').strip()
-                    scan_rate = row.get('Scan Rate', '').strip()
-                    description = row.get('Description', '').strip()
-                    
+                    address = row.get("Address", "").strip()
+                    data_type = row.get("Data Type", "").strip()
+                    access = row.get("Client Access", "R/W").strip()
+                    scan_rate = row.get("Scan Rate", "").strip()
+                    description = row.get("Description", "").strip()
+
                     # Normalize address format: 103 -> 000103, 400095 [25] -> 400095 [25], etc.
                     if address:
-                        if '[' in address:
+                        if "[" in address:
                             # Handle array format like "103 [5]"
-                            parts = address.split(' [')
+                            parts = address.split(" [")
                             addr_part = parts[0].strip()
                             # Pad with zeros to 6 digits
                             addr_part = addr_part.zfill(6)
@@ -497,67 +462,87 @@ class AppController:
                         else:
                             # Pad with zeros to 6 digits
                             address = address.zfill(6)
-                    
+
                     # Convert format back: R/W -> Read/Write, RO -> Read Only
-                    if access == 'R/W':
-                        access = 'Read/Write'
-                    elif access == 'RO':
-                        access = 'Read Only'
-                    
+                    if access == "R/W":
+                        access = "Read/Write"
+                    elif access == "RO":
+                        access = "Read Only"
+
                     # Convert data type back: Word Array -> Word(Array), etc.
-                    data_type = data_type.replace(' Array', '(Array)')
-                    
+                    data_type = data_type.replace(" Array", "(Array)")
+
                     # Build tag data
                     tag_data = {
-                        'name': tag_name,
-                        'description': description,
-                        'data_type': data_type,
-                        'access': access,
-                        'address': address,
-                        'scan_rate': scan_rate,
-                        'general': {
-                            'name': tag_name,
-                            'description': description,
-                            'data_type': data_type,
-                            'access': access,
-                            'address': address,
-                            'scan_rate': scan_rate,
+                        "name": tag_name,
+                        "description": description,
+                        "data_type": data_type,
+                        "access": access,
+                        "address": address,
+                        "scan_rate": scan_rate,
+                        "general": {
+                            "name": tag_name,
+                            "description": description,
+                            "data_type": data_type,
+                            "access": access,
+                            "address": address,
+                            "scan_rate": scan_rate,
                         },
-                        'scaling': {}
+                        "scaling": {},
                     }
-                    
+
                     # Get scaling data if present
-                    scaling_type = row.get('Scaling', '').strip() if row.get('Scaling') else ''
-                    
+                    scaling_type = (
+                        row.get("Scaling", "").strip() if row.get("Scaling") else ""
+                    )
+
                     # If Scaling field is empty or 'None', treat as no scaling
-                    if not scaling_type or scaling_type == 'None':
-                        tag_data['scaling'] = {
-                            'type': 'None',
-                            'raw_low': '0',
-                            'raw_high': '1000',
-                            'scaled_type': 'Float',
-                            'scaled_low': '0.0',
-                            'scaled_high': '100.0',
-                            'clamp_low': 'No',
-                            'clamp_high': 'No',
-                            'negate': 'No',
-                            'units': '',
+                    if not scaling_type or scaling_type == "None":
+                        tag_data["scaling"] = {
+                            "type": "None",
+                            "raw_low": "0",
+                            "raw_high": "1000",
+                            "scaled_type": "Float",
+                            "scaled_low": "0.0",
+                            "scaled_high": "100.0",
+                            "clamp_low": "No",
+                            "clamp_high": "No",
+                            "negate": "No",
+                            "units": "",
                         }
                     else:
                         # Extract scaling values from CSV rows
-                        tag_data['scaling'] = {
-                            'type': scaling_type,
-                            'raw_low': row.get('Raw Low', '0').strip() if row.get('Raw Low') else '0',
-                            'raw_high': row.get('Raw High', '1000').strip() if row.get('Raw High') else '1000',
-                            'scaled_type': row.get('Scaled Data Type', 'Float').strip() if row.get('Scaled Data Type') else 'Float',
-                            'scaled_low': row.get('Scaled Low', '0.0').strip() if row.get('Scaled Low') else '0.0',
-                            'scaled_high': row.get('Scaled High', '100.0').strip() if row.get('Scaled High') else '100.0',
-                            'clamp_low': row.get('Clamp Low', 'No').strip() if row.get('Clamp Low') else 'No',
-                            'clamp_high': row.get('Clamp High', 'No').strip() if row.get('Clamp High') else 'No',
-                            'negate': row.get('Negate Value', 'No').strip() if row.get('Negate Value') else 'No',
-                            'units': row.get('Eng Units', '').strip() if row.get('Eng Units') else '',
+                        tag_data["scaling"] = {
+                            "type": scaling_type,
+                            "raw_low": row.get("Raw Low", "0").strip()
+                            if row.get("Raw Low")
+                            else "0",
+                            "raw_high": row.get("Raw High", "1000").strip()
+                            if row.get("Raw High")
+                            else "1000",
+                            "scaled_type": row.get("Scaled Data Type", "Float").strip()
+                            if row.get("Scaled Data Type")
+                            else "Float",
+                            "scaled_low": row.get("Scaled Low", "0.0").strip()
+                            if row.get("Scaled Low")
+                            else "0.0",
+                            "scaled_high": row.get("Scaled High", "100.0").strip()
+                            if row.get("Scaled High")
+                            else "100.0",
+                            "clamp_low": row.get("Clamp Low", "No").strip()
+                            if row.get("Clamp Low")
+                            else "No",
+                            "clamp_high": row.get("Clamp High", "No").strip()
+                            if row.get("Clamp High")
+                            else "No",
+                            "negate": row.get("Negate Value", "No").strip()
+                            if row.get("Negate Value")
+                            else "No",
+                            "units": row.get("Eng Units", "").strip()
+                            if row.get("Eng Units")
+                            else "",
                         }
-                    
+
                     # Find or create tag item under current parent (group or device)
                     tag_item = None
                     for i in range(current_parent.childCount()):
@@ -565,20 +550,23 @@ class AppController:
                         if child.text(0) == tag_name:
                             tag_item = child
                             break
-                    
+
                     if tag_item is None:
                         # Create new tag
                         tag_item = QTreeWidgetItem(current_parent)
                         tag_item.setText(0, tag_name)
-                        tag_item.setData(0, Qt.ItemDataRole.UserRole, 'Tag')
+                        tag_item.setData(0, Qt.ItemDataRole.UserRole, "Tag")
                         tag_item.setHidden(True)
-                    
+
                     # Save tag data
                     self.save_tag(tag_item, tag_data)
-                    
-                    print(f"Imported tag: {full_tag_name} -> Address: {address}, Data Type: {data_type}")
+
+                    print(
+                        f"Imported tag: {full_tag_name} -> Address: {address}, Data Type: {data_type}"
+                    )
         except Exception as e:
             import traceback
+
             print(f"Import error: {e}")
             traceback.print_exc()
 
@@ -587,16 +575,17 @@ class AppController:
         if not filepath or not os.path.exists(filepath):
             return
         from PyQt6.QtWidgets import QTreeWidgetItem
+
         try:
-            with open(filepath, 'r', encoding='utf-8') as f:
+            with open(filepath, "r", encoding="utf-8") as f:
                 doc = json.load(f)
         except Exception:
             return
 
-        root = getattr(self.app, 'tree', None)
+        root = getattr(self.app, "tree", None)
         if root is None:
             return
-        conn = getattr(root, 'conn_node', None)
+        conn = getattr(root, "conn_node", None)
         if conn is None:
             return
 
@@ -610,21 +599,31 @@ class AppController:
         def _normalize_driver(drv):
             try:
                 if isinstance(drv, dict):
-                    dtype = drv.get('type')
-                    dparams = drv.get('params') if isinstance(drv.get('params'), dict) else (drv.get('params') or {})
+                    dtype = drv.get("type")
+                    dparams = (
+                        drv.get("params")
+                        if isinstance(drv.get("params"), dict)
+                        else (drv.get("params") or {})
+                    )
                     if isinstance(dtype, dict):
                         inner = dtype
-                        if isinstance(inner.get('type'), str):
-                            return {'type': inner.get('type'), 'params': inner.get('params') or dparams or {}}
-                    return {'type': dtype, 'params': dparams if isinstance(dparams, dict) else {}}
+                        if isinstance(inner.get("type"), str):
+                            return {
+                                "type": inner.get("type"),
+                                "params": inner.get("params") or dparams or {},
+                            }
+                    return {
+                        "type": dtype,
+                        "params": dparams if isinstance(dparams, dict) else {},
+                    }
                 else:
-                    return {'type': drv, 'params': {}}
+                    return {"type": drv, "params": {}}
             except Exception:
-                return {'type': drv, 'params': {}}
+                return {"type": drv, "params": {}}
 
         def build(parent, node):
-            t = node.get('type')
-            txt = node.get('text') or (node.get('general') or {}).get('name') or ''
+            t = node.get("type")
+            txt = node.get("text") or (node.get("general") or {}).get("name") or ""
             item = QTreeWidgetItem(parent)
             try:
                 item.setText(0, txt)
@@ -635,70 +634,139 @@ class AppController:
             except Exception:
                 pass
 
-            if t == 'Tag':
+            if t == "Tag":
                 try:
                     item.setHidden(True)
                 except Exception:
                     pass
 
-            if t == 'Channel':
+            if t == "Channel":
                 try:
-                    general = node.get('general') if isinstance(node.get('general'), dict) else {}
-                    desc = general.get('description') if general.get('description') is not None else node.get('description') or ''
+                    general = (
+                        node.get("general")
+                        if isinstance(node.get("general"), dict)
+                        else {}
+                    )
+                    desc = (
+                        general.get("description")
+                        if general.get("description") is not None
+                        else node.get("description") or ""
+                    )
                     try:
                         item.setData(1, Qt.ItemDataRole.UserRole, desc)
                     except Exception:
                         pass
 
-                    drv_raw = node.get('driver') if 'driver' in node else node.get('params') or {}
+                    drv_raw = (
+                        node.get("driver")
+                        if "driver" in node
+                        else node.get("params") or {}
+                    )
                     drv = _normalize_driver(drv_raw)
                     try:
-                        item.setData(2, Qt.ItemDataRole.UserRole, drv if drv is not None else drv_raw)
+                        item.setData(
+                            2,
+                            Qt.ItemDataRole.UserRole,
+                            drv if drv is not None else drv_raw,
+                        )
                     except Exception:
                         try:
                             item.setData(2, Qt.ItemDataRole.UserRole, drv_raw)
                         except Exception:
                             pass
                     try:
-                        item.setData(9, Qt.ItemDataRole.UserRole, OrderedDict([('type', drv.get('type')), ('params', drv.get('params') or {})]))
+                        item.setData(
+                            9,
+                            Qt.ItemDataRole.UserRole,
+                            OrderedDict(
+                                [
+                                    ("type", drv.get("type")),
+                                    ("params", drv.get("params") or {}),
+                                ]
+                            ),
+                        )
                     except Exception:
                         pass
 
-                    comm = node.get('communication') if isinstance(node.get('communication'), dict) else (node.get('params') if isinstance(node.get('params'), dict) else {})
+                    comm = (
+                        node.get("communication")
+                        if isinstance(node.get("communication"), dict)
+                        else (
+                            node.get("params")
+                            if isinstance(node.get("params"), dict)
+                            else {}
+                        )
+                    )
                     if not comm:
                         try:
-                            dp = drv.get('params') if isinstance(drv.get('params'), dict) else {}
-                            comm_keys = set(['com', 'baud', 'data_bits', 'parity', 'stop', 'flow', 'ip', 'port'])
+                            dp = (
+                                drv.get("params")
+                                if isinstance(drv.get("params"), dict)
+                                else {}
+                            )
+                            comm_keys = set(
+                                [
+                                    "com",
+                                    "baud",
+                                    "data_bits",
+                                    "parity",
+                                    "stop",
+                                    "flow",
+                                    "ip",
+                                    "port",
+                                ]
+                            )
                             comm = {k: v for k, v in dp.items() if k in comm_keys}
                         except Exception:
                             comm = {}
 
                     # Normalize import: for TCP-like channels, convert ip/port to network_adapter if no adapter specified
                     try:
-                        drv_type = drv.get('type') if isinstance(drv, dict) else ''
-                        drv_low = str(drv_type or '').lower()
-                        tcp_like = any(x in drv_low for x in ("over tcp", "ethernet", "tcp"))
+                        drv_type = drv.get("type") if isinstance(drv, dict) else ""
+                        drv_low = str(drv_type or "").lower()
+                        tcp_like = any(
+                            x in drv_low for x in ("over tcp", "ethernet", "tcp")
+                        )
                     except Exception:
                         tcp_like = False
 
                     if tcp_like:
                         try:
-                            comm_src = node.get('communication') if isinstance(node.get('communication'), dict) else None
-                            has_ip_port = isinstance(comm_src, dict) and (('ip' in comm_src) or ('port' in comm_src))
-                            has_adapter_key = isinstance(comm_src, dict) and any(k in comm_src for k in ('network_adapter', 'adapter', 'adapter_name'))
+                            comm_src = (
+                                node.get("communication")
+                                if isinstance(node.get("communication"), dict)
+                                else None
+                            )
+                            has_ip_port = isinstance(comm_src, dict) and (
+                                ("ip" in comm_src) or ("port" in comm_src)
+                            )
+                            has_adapter_key = isinstance(comm_src, dict) and any(
+                                k in comm_src
+                                for k in ("network_adapter", "adapter", "adapter_name")
+                            )
                             if has_ip_port and not has_adapter_key:
-                                comm = {'network_adapter': 'Default'}
+                                comm = {"network_adapter": "Default"}
                             else:
                                 # if driver params contain adapter info, prefer that
                                 try:
-                                    dp = drv.get('params') if isinstance(drv.get('params'), dict) else {}
-                                    a_raw = dp.get('adapter') or dp.get('adapter_name') or dp.get('adapter_ip')
+                                    dp = (
+                                        drv.get("params")
+                                        if isinstance(drv.get("params"), dict)
+                                        else {}
+                                    )
+                                    a_raw = (
+                                        dp.get("adapter")
+                                        or dp.get("adapter_name")
+                                        or dp.get("adapter_ip")
+                                    )
                                     if a_raw:
-                                        if isinstance(a_raw, str) and ' - ' in a_raw:
-                                            _, name_part = a_raw.split(' - ', 1)
-                                            comm = {'network_adapter': name_part.strip()}
+                                        if isinstance(a_raw, str) and " - " in a_raw:
+                                            _, name_part = a_raw.split(" - ", 1)
+                                            comm = {
+                                                "network_adapter": name_part.strip()
+                                            }
                                         else:
-                                            comm = {'network_adapter': a_raw}
+                                            comm = {"network_adapter": a_raw}
                                 except Exception:
                                     pass
                         except Exception:
@@ -710,12 +778,24 @@ class AppController:
                 except Exception:
                     pass
 
-            if t == 'Device':
+            if t == "Device":
                 try:
-                    general = node.get('general') if isinstance(node.get('general'), dict) else {}
-                    name = general.get('name') or node.get('name') or item.text(0)
-                    desc = general.get('description') if general.get('description') is not None else node.get('description')
-                    device_id = general.get('device_id') if general.get('device_id') is not None else node.get('device_id')
+                    general = (
+                        node.get("general")
+                        if isinstance(node.get("general"), dict)
+                        else {}
+                    )
+                    name = general.get("name") or node.get("name") or item.text(0)
+                    desc = (
+                        general.get("description")
+                        if general.get("description") is not None
+                        else node.get("description")
+                    )
+                    device_id = (
+                        general.get("device_id")
+                        if general.get("device_id") is not None
+                        else node.get("device_id")
+                    )
                     try:
                         if name is not None:
                             item.setText(0, name)
@@ -732,46 +812,81 @@ class AppController:
                     except Exception:
                         pass
                     try:
-                        if node.get('timing') is not None:
-                            item.setData(3, Qt.ItemDataRole.UserRole, node.get('timing'))
+                        if node.get("timing") is not None:
+                            item.setData(
+                                3, Qt.ItemDataRole.UserRole, node.get("timing")
+                            )
                     except Exception:
                         pass
                     try:
-                        if node.get('data_access') is not None:
-                            item.setData(4, Qt.ItemDataRole.UserRole, node.get('data_access'))
+                        if node.get("data_access") is not None:
+                            item.setData(
+                                4, Qt.ItemDataRole.UserRole, node.get("data_access")
+                            )
                     except Exception:
                         pass
                     try:
-                        if node.get('encoding') is not None:
-                            enc = node.get('encoding')
+                        if node.get("encoding") is not None:
+                            enc = node.get("encoding")
                             # Backward compatibility: map old field names to new ones
                             if isinstance(enc, dict):
-                                if 'word_low' in enc and 'word_order' not in enc:
-                                    enc['word_order'] = enc.pop('word_low')
-                                if 'dword_low' in enc and 'dword_order' not in enc:
-                                    enc['dword_order'] = enc.pop('dword_low')
-                                if 'treat_long' in enc and 'treat_longs_as_decimals' not in enc:
-                                    enc['treat_longs_as_decimals'] = enc.pop('treat_long')
+                                if "word_low" in enc and "word_order" not in enc:
+                                    enc["word_order"] = enc.pop("word_low")
+                                if "dword_low" in enc and "dword_order" not in enc:
+                                    enc["dword_order"] = enc.pop("dword_low")
+                                if (
+                                    "treat_long" in enc
+                                    and "treat_longs_as_decimals" not in enc
+                                ):
+                                    enc["treat_longs_as_decimals"] = enc.pop(
+                                        "treat_long"
+                                    )
                             item.setData(5, Qt.ItemDataRole.UserRole, enc)
                     except Exception:
                         pass
                     try:
-                        if node.get('block_sizes') is not None:
-                            item.setData(6, Qt.ItemDataRole.UserRole, node.get('block_sizes'))
+                        if node.get("block_sizes") is not None:
+                            item.setData(
+                                6, Qt.ItemDataRole.UserRole, node.get("block_sizes")
+                            )
                     except Exception:
                         pass
                 except Exception:
                     pass
 
-            if t == 'Tag':
+            if t == "Tag":
                 try:
-                    general = node.get('general') if isinstance(node.get('general'), dict) else {}
-                    name = general.get('name') or node.get('name') or item.text(0)
-                    desc = general.get('description') if general.get('description') is not None else node.get('description')
-                    dtype = general.get('data_type') if general.get('data_type') is not None else node.get('data_type')
-                    access = general.get('access') if general.get('access') is not None else node.get('access')
-                    addr = general.get('address') if general.get('address') is not None else node.get('address')
-                    scan = general.get('scan_rate') if general.get('scan_rate') is not None else node.get('scan_rate')
+                    general = (
+                        node.get("general")
+                        if isinstance(node.get("general"), dict)
+                        else {}
+                    )
+                    name = general.get("name") or node.get("name") or item.text(0)
+                    desc = (
+                        general.get("description")
+                        if general.get("description") is not None
+                        else node.get("description")
+                    )
+                    dtype = (
+                        general.get("data_type")
+                        if general.get("data_type") is not None
+                        else node.get("data_type")
+                    )
+                    access = (
+                        general.get("access")
+                        if general.get("access") is not None
+                        else node.get("access")
+                    )
+                    addr = (
+                        general.get("address")
+                        if general.get("address") is not None
+                        else node.get("address")
+                    )
+                    scan = (
+                        general.get("scan_rate")
+                        if general.get("scan_rate") is not None
+                        else node.get("scan_rate")
+                    )
                     try:
                         if name is not None:
                             item.setText(0, name)
@@ -803,16 +918,21 @@ class AppController:
                     except Exception:
                         pass
                     try:
-                        scaling = node.get('scaling') if node.get('scaling') is not None else None
+                        scaling = (
+                            node.get("scaling")
+                            if node.get("scaling") is not None
+                            else None
+                        )
                         if scaling is not None:
                             item.setData(6, Qt.ItemDataRole.UserRole, scaling)
                     except Exception:
                         pass
                     try:
                         import re
+
                         addr_val = item.data(4, Qt.ItemDataRole.UserRole)
                         dt_val = item.data(2, Qt.ItemDataRole.UserRole)
-                        nm = (item.text(0) or '')
+                        nm = item.text(0) or ""
                         addrnum = None
                         if addr_val is not None:
                             m = re.search(r"(\d+)", str(addr_val))
@@ -820,52 +940,62 @@ class AppController:
                                 addrnum = int(m.group(1))
                         is_array = False
                         try:
-                            if isinstance(dt_val, str) and 'array' in dt_val.lower():
+                            if isinstance(dt_val, str) and "array" in dt_val.lower():
                                 is_array = True
-                            if isinstance(addr_val, str) and re.search(r"\[\d+\]", addr_val):
+                            if isinstance(addr_val, str) and re.search(
+                                r"\[\d+\]", addr_val
+                            ):
                                 is_array = True
-                            if 'array' in nm.lower():
+                            if "array" in nm.lower():
                                 is_array = True
                         except Exception:
                             is_array = False
-                        item.setData(7, Qt.ItemDataRole.UserRole, {'addrnum': addrnum, 'is_array': is_array})
+                        item.setData(
+                            7,
+                            Qt.ItemDataRole.UserRole,
+                            {"addrnum": addrnum, "is_array": is_array},
+                        )
                     except Exception:
                         pass
                 except Exception:
                     pass
 
-            if t == 'Group':
+            if t == "Group":
                 try:
-                    desc = node.get('description') if node.get('description') is not None else ''
+                    desc = (
+                        node.get("description")
+                        if node.get("description") is not None
+                        else ""
+                    )
                     if desc is not None:
                         item.setData(1, Qt.ItemDataRole.UserRole, desc)
                 except Exception:
                     pass
 
-            for c in node.get('children', []) or []:
+            for c in node.get("children", []) or []:
                 try:
                     build(item, c)
                 except Exception:
                     pass
 
-        for ch in doc.get('channels', []) or []:
+        for ch in doc.get("channels", []) or []:
             try:
                 build(conn, ch)
             except Exception:
                 pass
 
         try:
-            opc = doc.get('opcua_settings')
-            if isinstance(opc, dict) and hasattr(self, 'normalize_opcua_settings'):
+            opc = doc.get("opcua_settings")
+            if isinstance(opc, dict) and hasattr(self, "normalize_opcua_settings"):
                 try:
                     opc = self.normalize_opcua_settings(opc)
                 except Exception:
                     pass
-            if opc is not None and hasattr(self, 'app') and self.app is not None:
+            if opc is not None and hasattr(self, "app") and self.app is not None:
                 try:
                     # apply opcua_settings from import (no terminal output)
                     self.app.opcua_settings = opc
-                    if hasattr(self.app, 'apply_opcua_settings'):
+                    if hasattr(self.app, "apply_opcua_settings"):
                         try:
                             self.app.apply_opcua_settings(opc)
                         except Exception:
@@ -877,16 +1007,24 @@ class AppController:
 
     def save_group(self, item, data):
         """Save group data to a tree item.
-        
+
         Args:
             item: QTreeWidgetItem representing the group
             data: Dictionary with group information (name, description, etc.)
         """
         try:
             # Extract group name and description from data
-            name = (data.get("general") or {}).get("name") or data.get("name") or item.text(0)
-            desc = (data.get("general") or {}).get("description") or data.get("description") or ""
-            
+            name = (
+                (data.get("general") or {}).get("name")
+                or data.get("name")
+                or item.text(0)
+            )
+            desc = (
+                (data.get("general") or {}).get("description")
+                or data.get("description")
+                or ""
+            )
+
             # Set the item data
             if name:
                 item.setText(0, name)
@@ -913,7 +1051,7 @@ class AppController:
                         t = c.data(0, Qt.ItemDataRole.UserRole)
                     except Exception:
                         t = None
-                    if t != 'Device':
+                    if t != "Device":
                         continue
                     # device id stored in role 2
                     try:
@@ -950,26 +1088,26 @@ class AppController:
 
     def calculate_next_address(self, parent_node, prefix=None, new_type=None):
         """Calculate the next available address for a tag under parent_node.
-        
+
         Args:
             parent_node: QTreeWidgetItem representing the parent (Device or Group)
             prefix: Optional address prefix (e.g., "0", "1", "3", "4")
             new_type: Optional data type to determine address step size
-            
+
         Returns:
             str: Suggested next address
         """
         try:
             if parent_node is None:
                 return "0"
-            
+
             # Get size for this data type
             size_map = {
                 "Boolean": 1,
                 "Char": 1,
                 "Short": 1,
                 "Word": 1,
-                "Int": 1,           # 16-bit signed integer (1 register)
+                "Int": 1,  # 16-bit signed integer (1 register)
                 "DInt": 2,
                 "Long": 2,
                 "DWord": 2,
@@ -978,7 +1116,7 @@ class AppController:
                 "Double": 4,
                 "String": 6,
             }
-            
+
             # Determine step size based on type
             # Sort by key length (descending) to match more specific types first
             # e.g., "DWord" before "Word"
@@ -990,40 +1128,56 @@ class AppController:
                     if key.lower() in type_name.lower():
                         step = size_map[key]
                         break
-            
+
             # Scan all child items for used addresses with the same prefix
             # Track the maximum ending address (not just starting address)
             max_end_addr = -1
-            
+
             for i in range(parent_node.childCount()):
                 try:
                     child = parent_node.child(i)
                     if child is None:
                         continue
-                    
+
                     # Skip non-Tag items
                     try:
-                        child_type = child.data(0, __import__('PyQt6.QtCore', fromlist=['Qt']).Qt.ItemDataRole.UserRole)
-                        if child_type != 'Tag':
+                        child_type = child.data(
+                            0,
+                            __import__(
+                                "PyQt6.QtCore", fromlist=["Qt"]
+                            ).Qt.ItemDataRole.UserRole,
+                        )
+                        if child_type != "Tag":
                             continue
                     except Exception:
                         continue
-                    
+
                     # Get address and data_type from the child
                     try:
-                        addr = child.data(4, __import__('PyQt6.QtCore', fromlist=['Qt']).Qt.ItemDataRole.UserRole)
+                        addr = child.data(
+                            4,
+                            __import__(
+                                "PyQt6.QtCore", fromlist=["Qt"]
+                            ).Qt.ItemDataRole.UserRole,
+                        )
                         if addr is None:
                             continue
-                        
-                        child_dtype = child.data(2, __import__('PyQt6.QtCore', fromlist=['Qt']).Qt.ItemDataRole.UserRole)
-                        
+
+                        child_dtype = child.data(
+                            2,
+                            __import__(
+                                "PyQt6.QtCore", fromlist=["Qt"]
+                            ).Qt.ItemDataRole.UserRole,
+                        )
+
                         # Extract numeric part from address
                         import re
+
                         addr_str = str(addr)
-                        
+
                         # Remove array notation [n] if present (for Array types)
-                        addr_str = re.sub(r'\s*\[\d+\]\s*$', '', addr_str)
-                        
+                        addr_str = re.sub(r"\s*\[\d+\]\s*$", "", addr_str)
+
                         # When prefix is specified, only count addresses with that prefix
                         if prefix is not None:
                             # Check if address starts with this prefix
@@ -1031,36 +1185,43 @@ class AppController:
                                 # Skip addresses with different prefixes
                                 continue
                             # Remove prefix to get numeric part
-                            addr_str = addr_str[len(prefix):]
-                        
+                            addr_str = addr_str[len(prefix) :]
+
                         # Extract digits (starting address)
-                        match = re.search(r'(\d+)', addr_str)
+                        match = re.search(r"(\d+)", addr_str)
                         if match:
                             start_num = int(match.group(1))
-                            
+
                             # Determine size of this tag (in registers)
                             # Sort by key length (descending) to match more specific types first
                             register_size = 1  # default registers per element
                             if child_dtype:
                                 dtype_name = str(child_dtype).strip()
-                                sorted_keys = sorted(size_map.keys(), key=len, reverse=True)
+                                sorted_keys = sorted(
+                                    size_map.keys(), key=len, reverse=True
+                                )
                                 for key in sorted_keys:
                                     if key.lower() in dtype_name.lower():
                                         register_size = size_map[key]
                                         break
-                            
+
                             # If this tag is an Array, calculate total size
                             # Array occupies: array_size × register_size addresses
-                            metadata = child.data(7, __import__('PyQt6.QtCore', fromlist=['Qt']).Qt.ItemDataRole.UserRole)
-                            if isinstance(metadata, dict) and metadata.get('is_array'):
-                                array_size = metadata.get('array_size', 1)
+                            metadata = child.data(
+                                7,
+                                __import__(
+                                    "PyQt6.QtCore", fromlist=["Qt"]
+                                ).Qt.ItemDataRole.UserRole,
+                            )
+                            if isinstance(metadata, dict) and metadata.get("is_array"):
+                                array_size = metadata.get("array_size", 1)
                                 child_size = array_size * register_size
                             else:
                                 child_size = register_size
-                            
+
                             # Calculate ending address
                             end_num = start_num + child_size - 1
-                            
+
                             # Track maximum ending address
                             if end_num > max_end_addr:
                                 max_end_addr = end_num
@@ -1068,30 +1229,30 @@ class AppController:
                         continue
                 except Exception:
                     continue
-            
-            # Calculate next address: 
+
+            # Calculate next address:
             # If no tags exist with this prefix, start from 0
             # Otherwise, start from the maximum ending address + 1
             if max_end_addr == -1:
                 next_addr_num = 0
             else:
                 next_addr_num = max_end_addr + 1
-            
+
             # Build result address with proper formatting (6 digits total: prefix + 5-digit number)
             if prefix is not None:
                 return f"{prefix}{next_addr_num:05d}"
             else:
                 return f"{next_addr_num:06d}"
-            
+
         except Exception:
             return "0"
 
     def export_project_to_json(self, filepath):
         # Export tree under the project's connection node to a JSON file.
-        root = getattr(self.app, 'tree', None)
+        root = getattr(self.app, "tree", None)
         if root is None:
             return
-        conn = getattr(root, 'conn_node', None)
+        conn = getattr(root, "conn_node", None)
         if conn is None:
             return
 
@@ -1099,6 +1260,7 @@ class AppController:
             t = item.data(0, Qt.ItemDataRole.UserRole)
             # Build node with deterministic key order matching UI tab/field ordering
             from collections import OrderedDict as _OD
+
             node = _OD()
             node["type"] = t
             node["text"] = item.text(0)
@@ -1115,7 +1277,16 @@ class AppController:
                 node["general"]["description"] = desc
 
                 # communication/params — canonical order matching UI: COM ID, Baud, Data Bits, Parity, Stop Bits, Flow Control, (IP, Port)
-                comm_keys = ["com", "baud", "data_bits", "parity", "stop", "flow", "ip", "port"]
+                comm_keys = [
+                    "com",
+                    "baud",
+                    "data_bits",
+                    "parity",
+                    "stop",
+                    "flow",
+                    "ip",
+                    "port",
+                ]
                 communication = _OD()
                 for k in comm_keys:
                     if isinstance(params, dict) and k in params:
@@ -1128,38 +1299,50 @@ class AppController:
                 try:
                     if isinstance(driver_val, dict):
                         # driver_val may be {'type': <str|dict>, 'params': {...}}
-                        raw_type = driver_val.get('type')
-                        outer_params = driver_val.get('params') if isinstance(driver_val.get('params'), dict) else {}
+                        raw_type = driver_val.get("type")
+                        outer_params = (
+                            driver_val.get("params")
+                            if isinstance(driver_val.get("params"), dict)
+                            else {}
+                        )
                         if isinstance(raw_type, dict):
                             # nested form: {'type': {'type': 'Modbus RTU Serial', 'params': {...}}, 'params': {...}}
                             inner = raw_type
-                            drv_type_val = inner.get('type') or ''
-                            inner_params = inner.get('params') if isinstance(inner.get('params'), dict) else {}
+                            drv_type_val = inner.get("type") or ""
+                            inner_params = (
+                                inner.get("params")
+                                if isinstance(inner.get("params"), dict)
+                                else {}
+                            )
                             # merge inner and outer params (outer overrides)
                             for k, v in (inner_params or {}).items():
                                 driver_params[k] = v
                             for k, v in (outer_params or {}).items():
                                 driver_params[k] = v
                         else:
-                            drv_type_val = raw_type or ''
+                            drv_type_val = raw_type or ""
                             for k, v in (outer_params or {}).items():
                                 driver_params[k] = v
                     else:
-                        drv_type_val = str(driver_val or '')
+                        drv_type_val = str(driver_val or "")
                 except Exception:
                     try:
-                        drv_type_val = str(driver_val or '')
+                        drv_type_val = str(driver_val or "")
                     except Exception:
-                        drv_type_val = ''
+                        drv_type_val = ""
 
-                node["driver"] = _OD([("type", drv_type_val), ("params", driver_params)])
+                node["driver"] = _OD(
+                    [("type", drv_type_val), ("params", driver_params)]
+                )
 
                 # communication: prefer explicit communication (role3).
                 # For TCP-like drivers prefer adapter/network_adapter keys; otherwise keep ip/port.
                 comm = communication or {}
                 try:
-                    drv_low = str(drv_type_val or '').lower()
-                    tcp_like = any(x in drv_low for x in ("over tcp", "ethernet", "tcp"))
+                    drv_low = str(drv_type_val or "").lower()
+                    tcp_like = any(
+                        x in drv_low for x in ("over tcp", "ethernet", "tcp")
+                    )
                 except Exception:
                     tcp_like = False
 
@@ -1167,38 +1350,64 @@ class AppController:
                     try:
                         if tcp_like:
                             # prefer adapter fields if present
-                            if isinstance(driver_params, dict) and (driver_params.get('adapter') or driver_params.get('adapter_name') or driver_params.get('adapter_ip')):
-                                a_raw = driver_params.get('adapter') or driver_params.get('adapter_name') or driver_params.get('adapter_ip')
+                            if isinstance(driver_params, dict) and (
+                                driver_params.get("adapter")
+                                or driver_params.get("adapter_name")
+                                or driver_params.get("adapter_ip")
+                            ):
+                                a_raw = (
+                                    driver_params.get("adapter")
+                                    or driver_params.get("adapter_name")
+                                    or driver_params.get("adapter_ip")
+                                )
                                 # If adapter string looks like "IP - Name", split into ip and name
                                 try:
-                                    if isinstance(a_raw, str) and ' - ' in a_raw:
-                                        ip_part, name_part = a_raw.split(' - ', 1)
-                                        comm = _OD([('network_adapter', name_part.strip()), ('network_adapter_ip', ip_part.strip())])
+                                    if isinstance(a_raw, str) and " - " in a_raw:
+                                        ip_part, name_part = a_raw.split(" - ", 1)
+                                        comm = _OD(
+                                            [
+                                                ("network_adapter", name_part.strip()),
+                                                ("network_adapter_ip", ip_part.strip()),
+                                            ]
+                                        )
                                     else:
-                                        comm = _OD([('network_adapter', a_raw)])
+                                        comm = _OD([("network_adapter", a_raw)])
                                 except Exception:
-                                    comm = _OD([('adapter', a_raw)])
+                                    comm = _OD([("adapter", a_raw)])
                                 # keep backwards-compatible keys too
                                 try:
-                                    comm['adapter'] = a_raw
+                                    comm["adapter"] = a_raw
                                 except Exception:
                                     pass
                                 # also expose adapter ip if available (explicit param)
-                                if driver_params.get('adapter_ip'):
-                                    comm['adapter_ip'] = driver_params.get('adapter_ip')
+                                if driver_params.get("adapter_ip"):
+                                    comm["adapter_ip"] = driver_params.get("adapter_ip")
                                     # mirror to network_adapter_ip if not already set
-                                    if 'network_adapter_ip' not in comm:
-                                        comm['network_adapter_ip'] = driver_params.get('adapter_ip')
-                            elif isinstance(driver_params, dict) and driver_params.get('ip') and driver_params.get('port'):
+                                    if "network_adapter_ip" not in comm:
+                                        comm["network_adapter_ip"] = driver_params.get(
+                                            "adapter_ip"
+                                        )
+                            elif (
+                                isinstance(driver_params, dict)
+                                and driver_params.get("ip")
+                                and driver_params.get("port")
+                            ):
                                 # If no adapter info present, prefer explicit network adapter selection
                                 # rather than exporting raw ip/port; set to Default by convention
-                                comm = _OD([('network_adapter', 'Default')])
+                                comm = _OD([("network_adapter", "Default")])
                             else:
                                 comm = _OD()
                         else:
                             # serial-like: keep com/baud etc from params
                             if isinstance(driver_params, dict):
-                                for k in ("com", "baud", "data_bits", "parity", "stop", "flow"):
+                                for k in (
+                                    "com",
+                                    "baud",
+                                    "data_bits",
+                                    "parity",
+                                    "stop",
+                                    "flow",
+                                ):
                                     if k in driver_params:
                                         comm[k] = driver_params.get(k)
                     except Exception:
@@ -1210,29 +1419,48 @@ class AppController:
                 # 'Interface Name (IP)' when possible. Remove other adapter/ip keys.
                 try:
                     if isinstance(params, dict) and tcp_like:
-                        na = params.get('network_adapter') or params.get('adapter') or params.get('adapter_name')
-                        nip = params.get('network_adapter_ip') or params.get('adapter_ip') or params.get('ip')
+                        na = (
+                            params.get("network_adapter")
+                            or params.get("adapter")
+                            or params.get("adapter_name")
+                        )
+                        nip = (
+                            params.get("network_adapter_ip")
+                            or params.get("adapter_ip")
+                            or params.get("ip")
+                        )
                         if na:
                             # If na already contains an ip in parentheses, keep it as-is.
-                            if isinstance(na, str) and '(' in na and na.endswith(')'):
-                                node['communication'] = _OD([('network_adapter', na)])
+                            if isinstance(na, str) and "(" in na and na.endswith(")"):
+                                node["communication"] = _OD([("network_adapter", na)])
                             else:
                                 if nip:
-                                    node['communication'] = _OD([('network_adapter', f"{na} ({nip})")])
+                                    node["communication"] = _OD(
+                                        [("network_adapter", f"{na} ({nip})")]
+                                    )
                                 else:
-                                    node['communication'] = _OD([('network_adapter', na)])
+                                    node["communication"] = _OD(
+                                        [("network_adapter", na)]
+                                    )
                         else:
                             # no adapter name known: leave whatever communication we already built
                             pass
                     else:
                         # non-tcp: preserve any additional adapter-ish fields from params
                         if isinstance(params, dict):
-                            if 'network_adapter' in params:
-                                node['communication']['network_adapter'] = params.get('network_adapter')
-                            if 'network_adapter_ip' in params:
-                                node['communication']['network_adapter_ip'] = params.get('network_adapter_ip')
-                            if 'adapter' in params and 'adapter' not in node['communication']:
-                                node['communication']['adapter'] = params.get('adapter')
+                            if "network_adapter" in params:
+                                node["communication"]["network_adapter"] = params.get(
+                                    "network_adapter"
+                                )
+                            if "network_adapter_ip" in params:
+                                node["communication"]["network_adapter_ip"] = (
+                                    params.get("network_adapter_ip")
+                                )
+                            if (
+                                "adapter" in params
+                                and "adapter" not in node["communication"]
+                            ):
+                                node["communication"]["adapter"] = params.get("adapter")
                 except Exception:
                     pass
             elif t == "Device":
@@ -1270,9 +1498,12 @@ class AppController:
                 try:
                     # find ancestor channel
                     anc = item.parent()
-                    while anc is not None and anc.data(0, Qt.ItemDataRole.UserRole) != 'Channel':
+                    while (
+                        anc is not None
+                        and anc.data(0, Qt.ItemDataRole.UserRole) != "Channel"
+                    ):
                         anc = anc.parent()
-                    drv_type = ''
+                    drv_type = ""
                     if anc is not None:
                         try:
                             pdrv = anc.data(2, Qt.ItemDataRole.UserRole)
@@ -1285,23 +1516,30 @@ class AppController:
                             except Exception:
                                 pdrv = None
                         if isinstance(pdrv, dict):
-                            dt = pdrv.get('type')
+                            dt = pdrv.get("type")
                             if isinstance(dt, dict):
-                                drv_type = str(dt.get('type') or '')
+                                drv_type = str(dt.get("type") or "")
                             else:
-                                drv_type = str(dt or '')
+                                drv_type = str(dt or "")
                         else:
-                            drv_type = str(pdrv or '')
-                    drv_type = (drv_type or '').lower()
+                            drv_type = str(pdrv or "")
+                    drv_type = (drv_type or "").lower()
                 except Exception:
-                    drv_type = ''
+                    drv_type = ""
 
                 # helpers to read fields with fallbacks
-                def _g(k, alt=None, default=''):
+                def _g(k, alt=None, default=""):
                     try:
-                        if isinstance(timing_src, dict) and timing_src.get(k) is not None:
+                        if (
+                            isinstance(timing_src, dict)
+                            and timing_src.get(k) is not None
+                        ):
                             return timing_src.get(k)
-                        if alt and isinstance(timing_src, dict) and timing_src.get(alt) is not None:
+                        if (
+                            alt
+                            and isinstance(timing_src, dict)
+                            and timing_src.get(alt) is not None
+                        ):
                             return timing_src.get(alt)
                     except Exception:
                         pass
@@ -1309,25 +1547,53 @@ class AppController:
 
                 timing_od = OrderedDict()
                 # RTU over TCP: include connect_timeout and connect_attempts
-                if 'rtu over tcp' in drv_type:
-                    timing_od['connect_timeout'] = _g('connect_timeout', 'req_timeout', '1000')
-                    timing_od['connect_attempts'] = _g('connect_attempts', 'attempts', '1')
-                    timing_od['request_timeout'] = _g('request_timeout', 'req_timeout', '1000')
-                    timing_od['attempts_before_timeout'] = _g('attempts_before_timeout', 'attempts', '1')
-                    timing_od['inter_request_delay'] = _g('inter_request_delay', 'inter_req_delay', '0')
+                if "rtu over tcp" in drv_type:
+                    timing_od["connect_timeout"] = _g(
+                        "connect_timeout", "req_timeout", "1000"
+                    )
+                    timing_od["connect_attempts"] = _g(
+                        "connect_attempts", "attempts", "1"
+                    )
+                    timing_od["request_timeout"] = _g(
+                        "request_timeout", "req_timeout", "1000"
+                    )
+                    timing_od["attempts_before_timeout"] = _g(
+                        "attempts_before_timeout", "attempts", "1"
+                    )
+                    timing_od["inter_request_delay"] = _g(
+                        "inter_request_delay", "inter_req_delay", "0"
+                    )
                 # TCP/IP Ethernet: include connect_timeout but not connect_attempts
-                elif 'tcp' in drv_type and 'ethernet' in drv_type or 'modbus tcp' in drv_type:
-                    timing_od['connect_timeout'] = _g('connect_timeout', 'req_timeout', '3')
-                    timing_od['request_timeout'] = _g('request_timeout', 'req_timeout', '1000')
-                    timing_od['attempts_before_timeout'] = _g('attempts_before_timeout', 'attempts', '1')
-                    timing_od['inter_request_delay'] = _g('inter_request_delay', 'inter_req_delay', '0')
+                elif (
+                    "tcp" in drv_type
+                    and "ethernet" in drv_type
+                    or "modbus tcp" in drv_type
+                ):
+                    timing_od["connect_timeout"] = _g(
+                        "connect_timeout", "req_timeout", "3"
+                    )
+                    timing_od["request_timeout"] = _g(
+                        "request_timeout", "req_timeout", "1000"
+                    )
+                    timing_od["attempts_before_timeout"] = _g(
+                        "attempts_before_timeout", "attempts", "1"
+                    )
+                    timing_od["inter_request_delay"] = _g(
+                        "inter_request_delay", "inter_req_delay", "0"
+                    )
                 else:
                     # default/serial: only include request_timeout, attempts_before_timeout, inter_request_delay
-                    timing_od['request_timeout'] = _g('request_timeout', 'req_timeout', '1000')
-                    timing_od['attempts_before_timeout'] = _g('attempts_before_timeout', 'attempts', '1')
-                    timing_od['inter_request_delay'] = _g('inter_request_delay', 'inter_req_delay', '0')
+                    timing_od["request_timeout"] = _g(
+                        "request_timeout", "req_timeout", "1000"
+                    )
+                    timing_od["attempts_before_timeout"] = _g(
+                        "attempts_before_timeout", "attempts", "1"
+                    )
+                    timing_od["inter_request_delay"] = _g(
+                        "inter_request_delay", "inter_req_delay", "0"
+                    )
 
-                node['timing'] = timing_od
+                node["timing"] = timing_od
 
                 # data_access
                 try:
@@ -1338,11 +1604,21 @@ class AppController:
                 if access is None:
                     access = {}
                 da_od = OrderedDict()
-                da_od["zero_based"] = to_numeric_flag(access.get("zero_based") if isinstance(access, dict) else access)
-                da_od["zero_based_bit"] = to_numeric_flag(access.get("zero_based_bit") if isinstance(access, dict) else access)
-                da_od["bit_writes"] = to_numeric_flag(access.get("bit_writes") if isinstance(access, dict) else access)
-                da_od["func_06"] = to_numeric_flag(access.get("func_06") if isinstance(access, dict) else access)
-                da_od["func_05"] = to_numeric_flag(access.get("func_05") if isinstance(access, dict) else access)
+                da_od["zero_based"] = to_numeric_flag(
+                    access.get("zero_based") if isinstance(access, dict) else access
+                )
+                da_od["zero_based_bit"] = to_numeric_flag(
+                    access.get("zero_based_bit") if isinstance(access, dict) else access
+                )
+                da_od["bit_writes"] = to_numeric_flag(
+                    access.get("bit_writes") if isinstance(access, dict) else access
+                )
+                da_od["func_06"] = to_numeric_flag(
+                    access.get("func_06") if isinstance(access, dict) else access
+                )
+                da_od["func_05"] = to_numeric_flag(
+                    access.get("func_05") if isinstance(access, dict) else access
+                )
                 node["data_access"] = da_od
 
                 # encoding
@@ -1354,11 +1630,21 @@ class AppController:
                 if enc is None:
                     enc = {}
                 enc_od = OrderedDict()
-                enc_od["byte_order"] = to_numeric_flag(enc.get("byte_order") if isinstance(enc, dict) else enc)
-                enc_od["word_order"] = to_numeric_flag(enc.get("word_order") if isinstance(enc, dict) else enc)
-                enc_od["dword_order"] = to_numeric_flag(enc.get("dword_order") if isinstance(enc, dict) else enc)
-                enc_od["bit_order"] = to_numeric_flag(enc.get("bit_order") if isinstance(enc, dict) else enc)
-                enc_od["treat_longs_as_decimals"] = to_numeric_flag(enc.get("treat_longs_as_decimals") if isinstance(enc, dict) else enc)
+                enc_od["byte_order"] = to_numeric_flag(
+                    enc.get("byte_order") if isinstance(enc, dict) else enc
+                )
+                enc_od["word_order"] = to_numeric_flag(
+                    enc.get("word_order") if isinstance(enc, dict) else enc
+                )
+                enc_od["dword_order"] = to_numeric_flag(
+                    enc.get("dword_order") if isinstance(enc, dict) else enc
+                )
+                enc_od["bit_order"] = to_numeric_flag(
+                    enc.get("bit_order") if isinstance(enc, dict) else enc
+                )
+                enc_od["treat_longs_as_decimals"] = to_numeric_flag(
+                    enc.get("treat_longs_as_decimals") if isinstance(enc, dict) else enc
+                )
                 node["encoding"] = enc_od
 
                 # block_sizes
@@ -1370,10 +1656,26 @@ class AppController:
                 if blocks is None:
                     blocks = {}
                 blocks_od = OrderedDict()
-                blocks_od["out_coils"] = blocks.get("out_coils") if isinstance(blocks, dict) and blocks.get("out_coils") is not None else 2000
-                blocks_od["in_coils"] = blocks.get("in_coils") if isinstance(blocks, dict) and blocks.get("in_coils") is not None else 2000
-                blocks_od["int_regs"] = blocks.get("int_regs") if isinstance(blocks, dict) and blocks.get("int_regs") is not None else 120
-                blocks_od["hold_regs"] = blocks.get("hold_regs") if isinstance(blocks, dict) and blocks.get("hold_regs") is not None else 120
+                blocks_od["out_coils"] = (
+                    blocks.get("out_coils")
+                    if isinstance(blocks, dict) and blocks.get("out_coils") is not None
+                    else 2000
+                )
+                blocks_od["in_coils"] = (
+                    blocks.get("in_coils")
+                    if isinstance(blocks, dict) and blocks.get("in_coils") is not None
+                    else 2000
+                )
+                blocks_od["int_regs"] = (
+                    blocks.get("int_regs")
+                    if isinstance(blocks, dict) and blocks.get("int_regs") is not None
+                    else 120
+                )
+                blocks_od["hold_regs"] = (
+                    blocks.get("hold_regs")
+                    if isinstance(blocks, dict) and blocks.get("hold_regs") is not None
+                    else 120
+                )
                 node["block_sizes"] = blocks_od
 
                 # ethernet
@@ -1450,18 +1752,18 @@ class AppController:
             for i in range(item.childCount()):
                 children.append(serialize(item.child(i)))
             if children:
-                node['children'] = children
+                node["children"] = children
             return node
 
         doc = {"type": "Project", "channels": []}
         for i in range(conn.childCount()):
             ch = conn.child(i)
             if ch.data(0, Qt.ItemDataRole.UserRole) == "Channel":
-                doc['channels'].append(serialize(ch))
+                doc["channels"].append(serialize(ch))
 
         # include opcua settings if the app has them; if missing, try to obtain defaults
         try:
-            opc = getattr(self.app, 'opcua_settings', None)
+            opc = getattr(self.app, "opcua_settings", None)
         except Exception:
             opc = None
         # normalize any existing opc settings so network_adapter fields are canonical
@@ -1478,8 +1780,9 @@ class AppController:
             # attempt to instantiate the dialog to retrieve canonical defaults
             try:
                 from ui.dialogs.opcua_dialog import OPCUADialog
+
                 try:
-                    dlg = OPCUADialog(getattr(self, 'app', None))
+                    dlg = OPCUADialog(getattr(self, "app", None))
                     opc = dlg.get_data() if dlg is not None else None
                 except Exception:
                     opc = None
@@ -1488,13 +1791,19 @@ class AppController:
         try:
             if opc is not None:
                 from collections import OrderedDict as _OD
+
                 def pick(src, *keys, default=None):
                     if not isinstance(src, dict):
                         return default
                     for k in keys:
                         if k in src:
                             return src.get(k)
-                    for sec in ('general', 'authentication', 'certificate', 'security_policies'):
+                    for sec in (
+                        "general",
+                        "authentication",
+                        "certificate",
+                        "security_policies",
+                    ):
                         sub = src.get(sec) if isinstance(src.get(sec), dict) else {}
                         for k in keys:
                             if k in sub:
@@ -1503,7 +1812,14 @@ class AppController:
 
                 opc_od = _OD()
                 # Build general section: prefer network_adapter string and omit separate network_adapter_ip
-                gen_keys = ['application_name', 'namespace', 'port', 'product_uri', 'max_sessions', 'publish_interval']
+                gen_keys = [
+                    "application_name",
+                    "namespace",
+                    "port",
+                    "product_uri",
+                    "max_sessions",
+                    "publish_interval",
+                ]
                 gen_od = _OD()
                 for k in gen_keys:
                     v = pick(opc, k)
@@ -1511,19 +1827,19 @@ class AppController:
                         gen_od[k] = v
 
                 # handle network adapter specially: merge name + ip into single 'network_adapter' field
-                na = pick(opc, 'network_adapter')
-                nip = pick(opc, 'network_adapter_ip')
-                if isinstance(na, str) and '(' in na and na.endswith(')'):
-                    gen_od['network_adapter'] = na
+                na = pick(opc, "network_adapter")
+                nip = pick(opc, "network_adapter_ip")
+                if isinstance(na, str) and "(" in na and na.endswith(")"):
+                    gen_od["network_adapter"] = na
                 else:
                     if na and nip:
-                        gen_od['network_adapter'] = f"{na} ({nip})"
+                        gen_od["network_adapter"] = f"{na} ({nip})"
                     elif na:
-                        gen_od['network_adapter'] = na
+                        gen_od["network_adapter"] = na
                     elif nip:
-                        gen_od['network_adapter'] = f"Auto ({nip})"
+                        gen_od["network_adapter"] = f"Auto ({nip})"
 
-                opc_od['general'] = gen_od
+                opc_od["general"] = gen_od
 
                 # Build authentication: ensure we don't emit duplicated nested username/password
                 auth_type = None
@@ -1531,24 +1847,27 @@ class AppController:
                 auth_pass = None
                 # prefer nested authentication dict if present
                 try:
-                    asec = opc.get('authentication') if isinstance(opc, dict) else None
+                    asec = opc.get("authentication") if isinstance(opc, dict) else None
                     if isinstance(asec, dict):
                         # asec may contain either {'authentication': 'Anonymous', 'username': '', 'password': ''}
-                        auth_type = asec.get('authentication') or asec.get('type')
-                        auth_user = asec.get('username') if 'username' in asec else None
-                        auth_pass = asec.get('password') if 'password' in asec else None
+                        auth_type = asec.get("authentication") or asec.get("type")
+                        auth_user = asec.get("username") if "username" in asec else None
+                        auth_pass = asec.get("password") if "password" in asec else None
                     # fallback to top-level keys
                     if auth_type is None:
-                        auth_type = pick(opc, 'authentication')
+                        auth_type = pick(opc, "authentication")
                     if auth_user is None:
-                        auth_user = pick(opc, 'username')
+                        auth_user = pick(opc, "username")
                     if auth_pass is None:
-                        auth_pass = pick(opc, 'password')
+                        auth_pass = pick(opc, "password")
                 except Exception:
                     pass
                 # If authentication is Anonymous, do not export username/password
                 try:
-                    if isinstance(auth_type, str) and auth_type.strip().lower() == 'anonymous':
+                    if (
+                        isinstance(auth_type, str)
+                        and auth_type.strip().lower() == "anonymous"
+                    ):
                         auth_user = None
                         auth_pass = None
                 except Exception:
@@ -1559,20 +1878,30 @@ class AppController:
                 # username/password to avoid losing fields during import.
                 auth_od = _OD()
                 try:
-                    auth_od['authentication'] = str(auth_type) if auth_type is not None else 'Anonymous'
+                    auth_od["authentication"] = (
+                        str(auth_type) if auth_type is not None else "Anonymous"
+                    )
                 except Exception:
-                    auth_od['authentication'] = 'Anonymous'
+                    auth_od["authentication"] = "Anonymous"
                 try:
-                    auth_od['username'] = '' if auth_user is None else str(auth_user)
+                    auth_od["username"] = "" if auth_user is None else str(auth_user)
                 except Exception:
-                    auth_od['username'] = ''
+                    auth_od["username"] = ""
                 try:
-                    auth_od['password'] = '' if auth_pass is None else str(auth_pass)
+                    auth_od["password"] = "" if auth_pass is None else str(auth_pass)
                 except Exception:
-                    auth_od['password'] = ''
-                opc_od['authentication'] = auth_od
+                    auth_od["password"] = ""
+                opc_od["authentication"] = auth_od
 
-                sp_keys = ['policy_none', 'policy_sign_aes128', 'policy_sign_aes256', 'policy_sign_basic256sha256', 'policy_encrypt_aes128', 'policy_encrypt_aes256', 'policy_encrypt_basic256sha256']
+                sp_keys = [
+                    "policy_none",
+                    "policy_sign_aes128",
+                    "policy_sign_aes256",
+                    "policy_sign_basic256sha256",
+                    "policy_encrypt_aes128",
+                    "policy_encrypt_aes256",
+                    "policy_encrypt_basic256sha256",
+                ]
                 sp_od = _OD()
                 for k in sp_keys:
                     v = None
@@ -1580,7 +1909,11 @@ class AppController:
                         if isinstance(opc, dict) and k in opc:
                             v = opc.get(k)
                         else:
-                            sp = opc.get('security_policies') if isinstance(opc.get('security_policies'), dict) else {}
+                            sp = (
+                                opc.get("security_policies")
+                                if isinstance(opc.get("security_policies"), dict)
+                                else {}
+                            )
                             if k in sp:
                                 v = sp.get(k)
                     except Exception:
@@ -1591,9 +1924,18 @@ class AppController:
                             sp_od[k] = to_numeric_flag(v)
                         except Exception:
                             sp_od[k] = v
-                opc_od['security_policies'] = sp_od
+                opc_od["security_policies"] = sp_od
 
-                cert_keys = ['auto_generate', 'common_name', 'organization', 'organization_unit', 'locality', 'state', 'country', 'cert_validity']
+                cert_keys = [
+                    "auto_generate",
+                    "common_name",
+                    "organization",
+                    "organization_unit",
+                    "locality",
+                    "state",
+                    "country",
+                    "cert_validity",
+                ]
                 cert_od = _OD()
                 for k in cert_keys:
                     v = None
@@ -1601,7 +1943,11 @@ class AppController:
                         if isinstance(opc, dict) and k in opc:
                             v = opc.get(k)
                         else:
-                            c = opc.get('certificate') if isinstance(opc.get('certificate'), dict) else {}
+                            c = (
+                                opc.get("certificate")
+                                if isinstance(opc.get("certificate"), dict)
+                                else {}
+                            )
                             if k in c:
                                 v = c.get(k)
                     except Exception:
@@ -1609,15 +1955,15 @@ class AppController:
                     if v is not None:
                         # normalize auto_generate boolean to numeric flag
                         try:
-                            if k == 'auto_generate':
+                            if k == "auto_generate":
                                 cert_od[k] = to_numeric_flag(v)
                             else:
                                 cert_od[k] = v
                         except Exception:
                             cert_od[k] = v
-                opc_od['certificate'] = cert_od
+                opc_od["certificate"] = cert_od
 
-                doc['opcua_settings'] = opc_od
+                doc["opcua_settings"] = opc_od
         except Exception:
             pass
 
@@ -1625,7 +1971,7 @@ class AppController:
             d = os.path.dirname(filepath)
             if d and not os.path.exists(d):
                 os.makedirs(d, exist_ok=True)
-            with open(filepath, 'w', encoding='utf-8') as f:
+            with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(doc, f, ensure_ascii=False, indent=2)
         except Exception:
             return

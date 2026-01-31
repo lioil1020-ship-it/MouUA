@@ -1,6 +1,14 @@
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLineEdit, QComboBox,
-    QPushButton, QFormLayout, QTabWidget, QWidget, QFrame,
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QComboBox,
+    QPushButton,
+    QFormLayout,
+    QTabWidget,
+    QWidget,
+    QFrame,
 )
 from PyQt6.QtGui import QIntValidator
 from ..theme import FORM_FIELD_STYLE
@@ -15,15 +23,22 @@ from core.config import (
 
 
 class TagDialog(QDialog):
-    def __init__(self, parent=None, suggested_name="Tag1", suggested_addr="400000", target_item=None, is_new=True):
+    def __init__(
+        self,
+        parent=None,
+        suggested_name="Tag1",
+        suggested_addr="400000",
+        target_item=None,
+        is_new=True,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Tag Properties")
         self.setMinimumSize(480, 580)
         self.setStyleSheet(FORM_FIELD_STYLE)
-        
+
         # 儲存目標 item（用於計算下一個地址）
         self.target_item = target_item
-        
+
         # 是否為新增標籤（不只是根據 suggested_addr 是否為 None）
         self._is_new = is_new
 
@@ -52,7 +67,9 @@ class TagDialog(QDialog):
         gen_lay = QFormLayout(self.tab_general)
 
         # Ensure suggested values are strings (QLineEdit expects str)
-        self.name_edit = QLineEdit(str(suggested_name) if suggested_name is not None else "")
+        self.name_edit = QLineEdit(
+            str(suggested_name) if suggested_name is not None else ""
+        )
         self.desc_edit = QLineEdit("")
 
         # 1-1. Data Type 下拉選單
@@ -73,7 +90,9 @@ class TagDialog(QDialog):
 
         # 1-3. Address 欄位
         # Address may be provided as int by callers; coerce to string
-        self.addr_edit = QLineEdit(str(suggested_addr) if suggested_addr is not None else "")
+        self.addr_edit = QLineEdit(
+            str(suggested_addr) if suggested_addr is not None else ""
+        )
 
         # 1-4. Scan Rate (default centralized here)
         self.scan_rate = QLineEdit("10")
@@ -164,107 +183,68 @@ class TagDialog(QDialog):
         self._toggle_scaling_visibility(self.scale_type.currentText())
 
     def _update_modbus_logic(self):
-        # 核心防錯邏輯：自動根據 Modbus 標準更換位址首位
+        import re
+
         data_type = self.type_combo.currentText()
         access = self.access_combo.currentText()
         addr_text = self.addr_edit.text()
-        
-        # 檢查是否為 Array 型別
+
         is_array = "Array" in data_type
-        
-        # 從地址中提取陣列大小（如果存在）
-        array_size = 1  # 預設
+        array_size = 1
         try:
-            import re
-            match = re.search(r'\[(\d+)\]', addr_text)
+            match = re.search(r"\[(\d+)\]", addr_text)
             if match:
                 array_size = int(match.group(1))
         except Exception:
             pass
-        
-        # 提取目前的流水號（取末 5 位，去掉陣列部分）
+
         try:
-            # 移除 [n] 部分
-            import re
-            addr_without_array = re.sub(r'\[\d+\]', '', addr_text)
-            # 只濾出數字部分
+            addr_without_array = re.sub(r"\[\d+\]", "", addr_text)
             nums = "".join(filter(str.isdigit, addr_without_array))
-            # 取得數值後取 MODBUS_ADDRESS_OFFSET 的餘數，保留原有的序號
             offset = int(nums) % MODBUS_ADDRESS_OFFSET if nums else 0
         except ValueError:
             offset = 0
 
-        # --- 判斷位址首位與 Scaling 權限 ---
         if "Boolean" in data_type:
-            # 1. Boolean 邏輯 (Coils/Inputs)
-            prefix = MODBUS_COIL_PREFIX if access == "Read/Write" else MODBUS_DISCRETE_PREFIX
-            # If creating a new tag, ask controller for per-prefix next address
-            if self._is_new and self.parent() and hasattr(self.parent(), "controller"):
-                try:
-                    target = self.target_item if hasattr(self, 'target_item') and self.target_item else None
-                    if target:
-                        nxt = self.parent().controller.calculate_next_address(target, prefix=prefix, new_type=data_type)
-                        if isinstance(nxt, str):
-                            base_addr = nxt
-                        else:
-                            base_addr = f"{prefix}{int(nxt):0{MODBUS_SEQUENCE_WIDTH}d}"
-                        # 如果是 Array，添加 [size]
-                        if is_array:
-                            base_addr = f"{base_addr} [{array_size}]"
-                        self.addr_edit.setText(base_addr)
-                    else:
-                        base_addr = f"{prefix}{offset:0{MODBUS_SEQUENCE_WIDTH}d}"
-                        if is_array:
-                            base_addr = f"{base_addr} [{array_size}]"
-                        self.addr_edit.setText(base_addr)
-                except Exception:
-                    base_addr = f"{prefix}{offset:0{MODBUS_SEQUENCE_WIDTH}d}"
-                    if is_array:
-                        base_addr = f"{base_addr} [{array_size}]"
-                    self.addr_edit.setText(base_addr)
-            else:
-                base_addr = f"{prefix}{offset:0{MODBUS_SEQUENCE_WIDTH}d}"
-                if is_array:
-                    base_addr = f"{base_addr} [{array_size}]"
-                self.addr_edit.setText(base_addr)
-
-            # 2. Boolean 禁用 Scaling
-            self.scale_type.setCurrentText("None")
-            self.scale_type.setEnabled(False)
+            prefix = (
+                MODBUS_COIL_PREFIX if access == "Read/Write" else MODBUS_DISCRETE_PREFIX
+            )
         else:
-            # 3. Register 邏輯 (Holding/Input Registers)
-            prefix = MODBUS_HOLDING_REG_PREFIX if access == "Read/Write" else MODBUS_INPUT_REG_PREFIX
-            if self._is_new and self.parent() and hasattr(self.parent(), "controller"):
+            prefix = (
+                MODBUS_HOLDING_REG_PREFIX
+                if access == "Read/Write"
+                else MODBUS_INPUT_REG_PREFIX
+            )
+
+        base_addr = self._calculate_tag_address(prefix, offset, is_array, array_size)
+        self.addr_edit.setText(base_addr)
+        self.scale_type.setEnabled("Boolean" not in data_type)
+        if "Boolean" in data_type:
+            self.scale_type.setCurrentText("None")
+
+    def _calculate_tag_address(self, prefix, offset, is_array, array_size):
+        if self._is_new and self.parent() and hasattr(self.parent(), "controller"):
+            target = getattr(self, "target_item", None)
+            if target:
                 try:
-                    target = self.target_item if hasattr(self, 'target_item') and self.target_item else None
-                    if target:
-                        nxt = self.parent().controller.calculate_next_address(target, prefix=prefix, new_type=data_type)
-                        if isinstance(nxt, str):
-                            base_addr = nxt
-                        else:
-                            base_addr = f"{prefix}{int(nxt):0{MODBUS_SEQUENCE_WIDTH}d}"
-                        # 如果是 Array，添加 [size]
-                        if is_array:
-                            base_addr = f"{base_addr} [{array_size}]"
-                        self.addr_edit.setText(base_addr)
-                    else:
-                        base_addr = f"{prefix}{offset:0{MODBUS_SEQUENCE_WIDTH}d}"
-                        if is_array:
-                            base_addr = f"{base_addr} [{array_size}]"
-                        self.addr_edit.setText(base_addr)
+                    nxt = self.parent().controller.calculate_next_address(
+                        target, prefix=prefix, new_type=self.type_combo.currentText()
+                    )
+                    base_addr = (
+                        nxt
+                        if isinstance(nxt, str)
+                        else f"{prefix}{int(nxt):0{MODBUS_SEQUENCE_WIDTH}d}"
+                    )
                 except Exception:
                     base_addr = f"{prefix}{offset:0{MODBUS_SEQUENCE_WIDTH}d}"
-                    if is_array:
-                        base_addr = f"{base_addr} [{array_size}]"
-                    self.addr_edit.setText(base_addr)
             else:
                 base_addr = f"{prefix}{offset:0{MODBUS_SEQUENCE_WIDTH}d}"
-                if is_array:
-                    base_addr = f"{base_addr} [{array_size}]"
-                self.addr_edit.setText(base_addr)
+        else:
+            base_addr = f"{prefix}{offset:0{MODBUS_SEQUENCE_WIDTH}d}"
 
-            # 4. 解鎖 Scaling
-            self.scale_type.setEnabled(True)
+        if is_array:
+            base_addr = f"{base_addr} [{array_size}]"
+        return base_addr
 
     def _toggle_scaling_visibility(self, text):
         # 切換 Scaling 參數區塊的顯示
@@ -339,15 +319,23 @@ class TagDialog(QDialog):
                         else:
                             prefix = "4" if access == "Read/Write" else "3"
                         # pass current selected data type as fallback for step calculation
-                        addr = self.parent().controller.calculate_next_address(current, prefix=prefix, new_type=self.type_combo.currentText())
+                        addr = self.parent().controller.calculate_next_address(
+                            current,
+                            prefix=prefix,
+                            new_type=self.type_combo.currentText(),
+                        )
                     except Exception:
                         addr = self.addr_edit.text()
             else:
                 addr = self.addr_edit.text()
 
         self.addr_edit.setText(addr)
-        self.type_combo.setCurrentText(gen.get("data_type", self.type_combo.currentText()))
-        self.access_combo.setCurrentText(gen.get("access", self.access_combo.currentText()))
+        self.type_combo.setCurrentText(
+            gen.get("data_type", self.type_combo.currentText())
+        )
+        self.access_combo.setCurrentText(
+            gen.get("access", self.access_combo.currentText())
+        )
         self.scan_rate.setText(gen.get("scan_rate", self.scan_rate.text()))
 
         sc = data.get("scaling", {})
@@ -355,11 +343,15 @@ class TagDialog(QDialog):
         self.scale_type.setCurrentText(stype)
         self.raw_low.setText(sc.get("raw_low", self.raw_low.text()))
         self.raw_high.setText(sc.get("raw_high", self.raw_high.text()))
-        self.scaled_type.setCurrentText(sc.get("scaled_type", self.scaled_type.currentText()))
+        self.scaled_type.setCurrentText(
+            sc.get("scaled_type", self.scaled_type.currentText())
+        )
         self.scaled_low.setText(sc.get("scaled_low", self.scaled_low.text()))
         self.scaled_high.setText(sc.get("scaled_high", self.scaled_high.text()))
         self.clamp_low.setCurrentText(sc.get("clamp_low", self.clamp_low.currentText()))
-        self.clamp_high.setCurrentText(sc.get("clamp_high", self.clamp_high.currentText()))
+        self.clamp_high.setCurrentText(
+            sc.get("clamp_high", self.clamp_high.currentText())
+        )
         self.negate.setCurrentText(sc.get("negate", self.negate.currentText()))
         self.units.setText(sc.get("units", self.units.text()))
 

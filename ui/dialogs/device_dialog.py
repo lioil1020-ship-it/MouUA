@@ -1,6 +1,13 @@
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
-    QLineEdit, QSpinBox, QLabel, QPushButton,
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QTabWidget,
+    QWidget,
+    QLineEdit,
+    QSpinBox,
+    QLabel,
+    QPushButton,
 )
 from PyQt6.QtCore import Qt
 from ui.components import FormBuilder
@@ -85,7 +92,9 @@ class DeviceDialog(QDialog):
             )
 
         if self.is_over_tcp:
-            self.timing_builder.add_field("connect_attempts", "Connect Attempts:", "text", default="1")
+            self.timing_builder.add_field(
+                "connect_attempts", "Connect Attempts:", "text", default="1"
+            )
 
         # 預設值修正：Attempts 改為 1
         self.timing_builder.add_field(
@@ -200,99 +209,108 @@ class DeviceDialog(QDialog):
         self.block_builder = FormBuilder()
 
         # 預設值修正：Coils=2000, Registers=120
-        self.block_builder.add_field("out_coils", "Output Coils:", "text", default="2000")
+        self.block_builder.add_field(
+            "out_coils", "Output Coils:", "text", default="2000"
+        )
         self.block_builder.add_field("in_coils", "Input Coils:", "text", default="2000")
-        self.block_builder.add_field("int_regs", "Internal Registers:", "text", default="120")
-        self.block_builder.add_field("hold_regs", "Holding Registers:", "text", default="120")
+        self.block_builder.add_field(
+            "int_regs", "Internal Registers:", "text", default="120"
+        )
+        self.block_builder.add_field(
+            "hold_regs", "Holding Registers:", "text", default="120"
+        )
 
         lay.addWidget(self.block_builder)
         self.tabs.addTab(self.tab_blocks, "Block Sizes")
 
     def load_data(self, data):
+        from core.utils import safe_getattr, safe_item_data
+
         if not data:
             return
-        # Support both flat structure and nested {'general': {...}} for compatibility.
-        general = None
-        if isinstance(data.get("general"), dict):
-            general = data.get("general")
-        else:
-            # fallback to flat keys
-            general = {"name": data.get("name", ""), "description": data.get("description", ""), "device_id": data.get("device_id")}
+
+        general = data.get("general") if isinstance(data.get("general"), dict) else None
+        if not general:
+            general = {
+                "name": data.get("name", ""),
+                "description": data.get("description", ""),
+                "device_id": data.get("device_id"),
+            }
 
         self.name_edit.setText(general.get("name", ""))
         self.desc_edit.setText(general.get("description", ""))
-        # If caller didn't provide a device_id, ask parent.controller for a suggestion
-        # device id may be provided under general or top-level
-        device_id = general.get("device_id") if general is not None else data.get("device_id")
-        if (
-            not device_id
-            and self.parent()
-            and hasattr(self.parent(), "controller")
-            and hasattr(self.parent(), "tree")
-        ):
-            current = self.parent().tree.currentItem()
-            if current and current.data(0, Qt.ItemDataRole.UserRole) == "Channel":
-                try:
-                    device_id = self.parent().controller.calculate_next_id(current)
-                except Exception:
-                    device_id = 1
 
-        self.id_spin.setValue(int(device_id or 1))
+        device_id = (
+            general.get("device_id") if general is not None else data.get("device_id")
+        )
+        if not device_id and self.parent():
+            current = safe_getattr(self.parent(), "tree", None)
+            if current:
+                current_item = safe_getattr(current, "currentItem", None)
+                if current_item and safe_item_data(current_item, 0, None) == "Channel":
+                    from core.utils import safe_call
 
-        # Load per-tab data: prefer top-level keys, fall back to values nested under `general`.
-        timing = data.get("timing") if data.get("timing") is not None else (general.get("timing") if isinstance(general, dict) and general.get("timing") is not None else None)
-        if timing is not None:
+                    controller = safe_getattr(self.parent(), "controller", None)
+                    if controller:
+                        device_id = safe_call(
+                            controller.calculate_next_id,
+                            current_item,
+                            default=1,
+                        )
+
+        from core.utils import validate_and_get_int
+
+        self.id_spin.setValue(
+            validate_and_get_int(device_id, default=1, min_val=1, max_val=65535)
+        )
+
+        self._load_tab_data(data, general)
+
+    def _load_tab_data(self, data, general):
+        timing = data.get("timing") or general.get("timing")
+        if timing:
             self.timing_builder.set_values(timing)
 
-        access = data.get("data_access") if data.get("data_access") is not None else (general.get("data_access") if isinstance(general, dict) and general.get("data_access") is not None else None)
-        if access is not None:
-            # Convert numeric values to string representation for combo boxes
-            access_display = {}
-            if isinstance(access, dict):
-                for k, v in access.items():
-                    # Convert 1/0 to "Enable"/"Disable"
-                    if k in ['zero_based', 'zero_based_bit', 'bit_writes', 'func_06', 'func_05']:
-                        if v in (1, '1', 'enable', 'Enable', 'true', 'True'):
-                            access_display[k] = 'Enable'
-                        elif v in (0, '0', 'disable', 'Disable', 'false', 'False'):
-                            access_display[k] = 'Disable'
-                        else:
-                            access_display[k] = str(v)
-                    else:
-                        access_display[k] = str(v)
-            else:
-                access_display = access
+        access = data.get("data_access") or general.get("data_access")
+        if access:
+            access_display = self._convert_flags_to_display(
+                access,
+                ["zero_based", "zero_based_bit", "bit_writes", "func_06", "func_05"],
+            )
             self.access_builder.set_values(access_display)
 
-        enc = data.get("encoding") if data.get("encoding") is not None else (general.get("encoding") if isinstance(general, dict) and general.get("encoding") is not None else None)
-        if enc is not None:
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.debug(f"Loading encoding data (raw): {enc}")
-            
-            # Convert numeric values to string representation for combo boxes
-            enc_display = {}
-            if isinstance(enc, dict):
-                for k, v in enc.items():
-                    # Convert 1/0 to "Enable"/"Disable"
-                    if k in ['byte_order', 'word_order', 'dword_order', 'bit_order', 'treat_longs_as_decimals']:
-                        if v in (1, '1', 'enable', 'Enable', 'true', 'True'):
-                            enc_display[k] = 'Enable'
-                        elif v in (0, '0', 'disable', 'Disable', 'false', 'False'):
-                            enc_display[k] = 'Disable'
-                        else:
-                            enc_display[k] = str(v)
-                    else:
-                        enc_display[k] = str(v)
-            
-            logger.debug(f"Loading encoding data (display): {enc_display}")
+        enc = data.get("encoding") or general.get("encoding")
+        if enc:
+            enc_display = self._convert_flags_to_display(
+                enc,
+                [
+                    "byte_order",
+                    "word_order",
+                    "dword_order",
+                    "bit_order",
+                    "treat_longs_as_decimals",
+                ],
+            )
             self.encoding_builder.set_values(enc_display)
 
-        blocks = data.get("block_sizes") if data.get("block_sizes") is not None else (general.get("block_sizes") if isinstance(general, dict) and general.get("block_sizes") is not None else None)
-        if blocks is not None:
+        blocks = data.get("block_sizes") or general.get("block_sizes")
+        if blocks:
             self.block_builder.set_values(blocks)
 
-        # Ethernet params moved to Channel; Device no longer manages them
+    def _convert_flags_to_display(self, flags_dict, flag_keys):
+        display = {}
+        if isinstance(flags_dict, dict):
+            for k, v in flags_dict.items():
+                if k in flag_keys:
+                    display[k] = self._flag_to_display_value(v)
+        return display
+
+    def _flag_to_display_value(self, value):
+        if value in (1, "1", "enable", "Enable", "true", "True"):
+            return "Enable"
+        elif value in (0, "0", "disable", "Disable", "false", "False"):
+            return "Disable"
+        return str(value)
 
     def get_data(self):
         # Return both flat and nested structures for compatibility
@@ -320,8 +338,11 @@ class DeviceDialog(QDialog):
         # ethernet moved to Channel/Driver; Device no longer returns ethernet settings
         result = {**flat, **nested}
         import logging
+
         logger = logging.getLogger(__name__)
-        logger.debug(f"DeviceDialog.get_data() returning encoding: {result.get('encoding')}")
+        logger.debug(
+            f"DeviceDialog.get_data() returning encoding: {result.get('encoding')}"
+        )
         return result
 
     def _normalize_block_sizes(self, raw):
@@ -349,7 +370,12 @@ class DeviceDialog(QDialog):
                         lk2 = lk.lower()
                         if "hold" in lk2:
                             out.setdefault("hold_regs", vi)
-                        elif "int" in lk2 or "internal" in lk2 or "input" in lk2 and "reg" in lk2:
+                        elif (
+                            "int" in lk2
+                            or "internal" in lk2
+                            or "input" in lk2
+                            and "reg" in lk2
+                        ):
                             out.setdefault("int_regs", vi)
                         elif "out" in lk2 and "coil" in lk2:
                             out.setdefault("out_coils", vi)
