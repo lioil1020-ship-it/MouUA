@@ -1,0 +1,104 @@
+ModUA_專案配置樹
+
+Modbus
+├── Channel_Properties/               # 通道層級設定
+│   ├── General/                      # 基本識別
+│   │   ├── Channel Name              # 通道名稱
+│   │   └── Description               # 描述說明
+│   ├── Driver/                       # 驅動與通訊協定
+│   │   ├── Select Driver             # 驅動選擇
+│   │   ├── IP Address                # 目標設備 IP (僅限 TCP 模式)
+│   │   ├── Port                      # 連接埠 (僅限 TCP 模式)
+│   │   └── Protocol                  # 傳輸協議 (僅限 TCP 模式)
+│   └── Communication/                # 實體通訊層設定
+│       ├── Network Adapter           # 網卡選擇 (僅限 TCP 模式)
+│       └── Serial Port/              # 序列埠設定 (僅限 RTU Serial)
+│           ├── COM ID                # 序列埠編號
+│           ├── Baud Rate             # 波特率
+│           ├── Data Bits             # 資料位元
+│           ├── Parity                # 校验位
+│           ├── Stop Bits             # 停止位
+│           └── Flow Control          # 流量控制
+│
+└── Device_Properties/                # 設備層級設定
+    ├── General/                      # 設備識別
+    │   ├── Device Name               # 設備名稱
+    │   ├── Description               # 描述說明
+    │   └── Device ID                 # 設備站號
+│   ├── Timing/                       # 逾時與重試機制
+│   │   ├── Connect Timeout (s)       # 連線逾時秒數 (僅限 TCP 模式)
+│   │   ├── Connect Attempts          # 連線嘗試次數 (僅限 RTU over tcp)
+│   │   ├── Request Timeout (ms)      # 請求逾時毫秒數
+│   │   ├── Attempts Before Timeout   # 請求重試次數
+│   │   └── Inter-Request Delay (ms)  # 請求間延遲
+    ├── DataAccess/                   # Modbus 標準功能設定
+    │   ├── Zero-Based Addressing     # 0基址開關
+    │   ├── Zero-Based Bit Addr.      # 0基址位元開關
+    │   ├── Holding Register Bit      # 是否允許對保持暫存器進行位元寫入
+    │   ├── Modbus Function 06        # 啟用單一暫存器寫入
+    │   └── Modbus Function 05        # 啟用單一線圈寫入
+    ├── DataEncoding/                 # 資料解析與位元組順序
+    │   ├── Modbus Byte Order         # 位元組順序
+    │   ├── First Word Low            # 高低字組交換
+    │   ├── First Dword Low           # 雙字組順序
+    │   ├── Modicon Bit Order         # Modicon 定義的位元順序
+    │   └── Treat Longs as Dec.       # 長整數處理方式
+    ├── Block Sizes/                  # 通訊打包優化
+    │   ├── Output Coils              # 線圈最大打包長度
+    │   ├── Input Coils               # 輸入線圈最大打包長度
+    │   ├── Internal Registers        # 內部暫存器最大打包長度
+    │   └── Holding Registers         # 保持暫存器最大打包長度
+    │
+    └── [Children: Group or Tag]      # 設備下的子節點 (可包含群組或點位)
+        ├── Group_Properties/         # 群組層級設定
+        │   ├── General/              # 群組基本識別
+        │   │   ├── Name              # 群組名稱
+        │   │   └── Description       # 描述說明
+        │   └── Tag_Properties/       # 隸屬於群組的點位設定
+        │       ├── General/          # 點位基本通訊設定
+        │       │   ├── Tag Name      # 點位名稱
+        │       │   ├── Desc.         # 描述說明
+        │       │   ├── Data Type     # 資料類型
+        │       │   ├── Access        # 存取權限
+        │       │   ├── Address       # 通訊位址
+        │       │   └── Scan Rate     # 掃描頻率
+		│		└── Scaling/          # 數據換算設定
+        │           ├── Scaling Type  # 換算類型
+        │           ├── Raw Low       # 原始值下限
+        │           ├── Raw High      # 原始值上限
+        │           ├── Scaled DT     # 換算後資料類型
+        │           ├── Scaled Low    # 換算後下限
+        │           ├── Scaled High   # 換算後上限
+        │           ├── Clamp Low     # 箝位低限
+        │           ├── Clamp High    # 箝位高限
+        │           ├── Negate Value  # 數值取反
+        │           └── Units         # 工程單位
+        │
+        └── Tag_Properties/           # 直接隸屬於設備的點位設定
+            ├── General/              # (同上：點位基本通訊設定)
+            └── Scaling/              # (同上：數值換算與處理)
+
+	
+OPC_UA_Server：
+├── Settings/                         # 基礎運行參數
+│   ├── Application Name              # 應用程式名稱
+│   ├── Host Name                     # 主機名稱
+│   ├── Namespace                     # 命名空間
+│   ├── Port                          # 通訊埠
+│   ├── Network Adapter               # 綁定網卡
+│   ├── Max Sessions                  # 最大連線數
+│   └── Publish Interval              # 發佈間隔 (ms)
+├── Authentication/                   # 身份驗證設定
+│   ├── Type                          # 驗證類型
+│   ├── Username                      # 帳號 (僅限 Username/Password)
+│   └── Password                      # 密碼 (僅限 Username/Password)
+├── SecurityPolicies/                 # 安全策略選擇
+│   └── Policies                      # 密碼策略
+└── Certificate/                      # 憑證資訊設定
+    ├── Auto Generate                 # 自動產生憑證開關
+    ├── Organization                  # 組織名稱
+    ├── Organization Unit             # 部門單位
+    ├── Locality                      # 所在地城市
+    ├── State                         # 州/省份
+    ├── Country                       # 國家代碼
+    └── Validity                      # 憑證有效期
