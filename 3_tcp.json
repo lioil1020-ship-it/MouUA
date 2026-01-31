@@ -43,10 +43,10 @@
           },
           "encoding": {
             "byte_order": 1,
-            "word_low": 1,
-            "dword_low": 1,
+            "word_order": 1,
+            "dword_order": 1,
             "bit_order": 0,
-            "treat_long": 0
+            "treat_longs_as_decimals": 0
           },
           "block_sizes": {
             "out_coils": 2000,
@@ -8894,16 +8894,17 @@
   "opcua_settings": {
     "general": {
       "application_name": "ModUA",
-      "host_name": "ModUA",
       "namespace": "ModUA",
-      "port": "48480",
-      "product_uri": "opc.tcp://192.168.1.101:48480",
+      "port": "4848",
+      "product_uri": "opc.tcp://192.168.1.101:4848",
       "max_sessions": "4096",
       "publish_interval": "1000",
       "network_adapter": "乙太網路 (192.168.1.101)"
     },
     "authentication": {
-      "authentication": "Anonymous"
+      "authentication": "Anonymous",
+      "username": "",
+      "password": ""
     },
     "security_policies": {
       "policy_none": 1,

@@ -17,7 +17,8 @@
         }
       },
       "communication": {
-        "network_adapter": "乙太網路 (192.168.1.101)"
+"network_adapter": "乙太網路 (192.168.1.101)",
+      "network_adapter_ip": "192.168.1.101"
       },
       "children": [
         {
