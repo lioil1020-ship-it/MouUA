@@ -7,4 +7,4 @@ dist/
 *.pyc
 *.csv
 *.ico
-.tmp/
+.tmp/nul
