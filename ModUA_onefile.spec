@@ -2,7 +2,6 @@
 import os
 import sys
 
-# 資源路徑整合 
 datas_list = [
     ('ui', 'ui'),
     ('images', 'images'),
@@ -10,7 +9,6 @@ datas_list = [
     ('certs', 'certs')
 ]
 
-# Windows 端名稱設定為 ModUA-onefile 
 app_name = 'ModUA-macos-onefile' if sys.platform == 'darwin' else 'ModUA-onefile'
 
 icon_param = None

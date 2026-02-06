@@ -2,7 +2,7 @@
 import os
 import sys
 
-# 修正：直接將原本寫在 YAML 的資源整合進來 
+# 直接將資源資料夾整合進來，避免在 YAML 下複雜指令
 datas_list = [
     ('ui', 'ui'),
     ('images', 'images'),
@@ -10,10 +10,10 @@ datas_list = [
     ('certs', 'certs')
 ]
 
-# 根據平台設定名稱，Windows 端加上 -onedir 以示區別 [cite: 10]
+# 根據平台設定名稱
 app_name = 'ModUA-macos' if sys.platform == 'darwin' else 'ModUA-onedir'
 
-# 圖示邏輯修正
+# 圖示邏輯
 icon_param = None
 if sys.platform == 'darwin':
     if os.path.exists('lioil.icns'):
@@ -61,5 +61,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name=app_name,
+    name=app_name, # 決定 dist 底下資料夾名稱
 )

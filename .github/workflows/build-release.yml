@@ -36,19 +36,21 @@ jobs:
           uv pip install pyinstaller
           if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 
-      # --- Windows 編譯步驟 ---
+      # --- Windows 步驟 ---
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
+          # 使用 uv run 執行 PyInstaller
           uv run pyinstaller ModUA-${{ matrix.build_type }}.spec
           if ("${{ matrix.build_type }}" -eq "onedir") {
             cd dist
+            # 自動找尋產出的資料夾並壓縮
             $target = Get-ChildItem -Directory | Select-Object -First 1 -ExpandProperty Name
             Compress-Archive -Path "$target" -DestinationPath "ModUA-Windows-onedir.zip" -Force
           }
 
-      # --- macOS 編譯步驟 ---
+      # --- macOS 步驟 ---
       - name: Build (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
@@ -56,9 +58,11 @@ jobs:
           uv run pyinstaller ModUA-${{ matrix.build_type }}.spec
           cd dist
           if [ "${{ matrix.build_type }}" == "onedir" ]; then
+            # 自動偵測產出的資料夾 (可能是 .app 或一般目錄)
             targetDir=$(find . -maxdepth 1 -type d -not -path "." | head -n 1)
             zip -r ModUA-macOS-onedir.zip "$targetDir"
           else
+            # onefile 模式
             targetFile=$(find . -maxdepth 1 -type f -not -name "*.zip" | head -n 1)
             zip ModUA-macOS-onefile.zip "$targetFile"
           fi
@@ -86,6 +90,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p final_assets
+          # 收集所有 zip 和 exe
           find raw_artifacts -type f \( -name "ModUA-*.zip" -o -name "ModUA-*.exe" \) -exec cp {} final_assets/ \;
           ls -lh final_assets/
 
