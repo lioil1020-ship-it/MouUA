@@ -22,12 +22,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Debug Path
-        run: |
-          echo "Current directory:"
-          pwd
-          ls -F
-
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -42,29 +36,41 @@ jobs:
           uv pip install pyinstaller
           if [ -f requirements.txt ]; then uv pip install -r requirements.txt; fi
 
+      # --- Windows 步驟 ---
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
+          # 執行編譯
           uv run pyinstaller ModUA-${{ matrix.build_type }}.spec
+          
+          # 進入產出目錄進行壓縮
           cd dist
           if ("${{ matrix.build_type }}" -eq "onedir") {
-            $target = Get-ChildItem -Directory | Select-Object -First 1 -ExpandProperty Name
-            Compress-Archive -Path "$target" -DestinationPath "ModUA-Windows-onedir.zip" -Force
+            # 自動取得產出的第一個資料夾並壓縮
+            $targetDir = Get-ChildItem -Directory | Select-Object -First 1
+            if ($targetDir) {
+                Compress-Archive -Path "$($targetDir.Name)" -DestinationPath "ModUA-Windows-onedir.zip" -Force
+            }
           }
+          # onefile 產出的 .exe 會在後續步驟直接被上傳
 
+      # --- macOS 步驟 ---
       - name: Build (macOS)
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
+          # 執行編譯
           uv run pyinstaller ModUA-${{ matrix.build_type }}.spec
+          
+          # 進入產出目錄進行壓縮
           cd dist
           if [ "${{ matrix.build_type }}" == "onedir" ]; then
-            # macOS 資料夾編譯通常產出為資料夾或 .app
-            targetDir=$(ls -d */ | head -n 1)
+            # 自動偵測產出的資料夾 (通常是 .app 或目錄)
+            targetDir=$(ls -d */ | head -n 1 | sed 's/\///')
             zip -r ModUA-macOS-onedir.zip "$targetDir"
           else
-            # 單檔案編譯
+            # 偵測單一執行檔並壓縮
             targetFile=$(ls -F | grep -v / | grep -v .zip | head -n 1)
             zip ModUA-macOS-onefile.zip "$targetFile"
           fi
@@ -92,6 +98,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p final_assets
+          # 收集所有 zip 與 exe 到發佈資料夾
           find raw_artifacts -type f \( -name "*.zip" -o -name "*.exe" \) -exec cp {} final_assets/ \;
           ls -R final_assets/
 
